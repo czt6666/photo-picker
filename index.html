@@ -9,8 +9,8 @@
   <body>
     <div id="app">
       <header class="toolbar">
-        <button id="btn-add" class="btn" title="把一个文件夹（及其子文件夹）加入图库">＋ 添加文件夹</button>
-        <button id="btn-rescan" class="btn icon" title="重新扫描图库">⟳</button>
+        <button id="btn-workdir" class="btn workdir">📁 选择工作目录…</button>
+        <button id="btn-rescan" class="btn icon" title="重新扫描工作目录">⟳</button>
         <div class="view-title" id="view-title"></div>
         <label class="toggle" title="只看加了星标的照片（快捷键 Shift+S）">
           <input type="checkbox" id="chk-starred" />
@@ -32,7 +32,7 @@
 
       <footer class="statusbar">
         <span id="status-count" class="status"></span>
-        <button id="btn-star" class="btn" title="给选中的照片加/取消星标（S 或 ⌘8）">☆ 星标</button>
+        <button id="btn-star" class="btn" title="给选中的照片加/取消星标（空格）">☆ 星标</button>
         <span id="status-thumbs" class="status dim"></span>
         <div class="spacer"></div>
         <label class="zoom" title="缩略图大小">
@@ -49,7 +49,7 @@
           <div class="v-title"><span class="v-name"></span><span class="v-pos dim"></span></div>
           <div class="v-actions">
             <button class="btn v-zoom" title="适合窗口 ↔ 1:1 实际像素（1 或双击）">1:1</button>
-            <button class="btn v-star" title="加/取消星标（S 或 ⌘8）">☆ 星标</button>
+            <button class="btn v-star" title="加/取消星标（空格）">☆ 星标</button>
             <button class="btn v-full" title="全屏（F）">⛶</button>
           </div>
         </div>

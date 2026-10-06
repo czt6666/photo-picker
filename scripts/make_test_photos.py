@@ -4,7 +4,9 @@
 
 生成内容：
 - 大图/      2400 万像素（6000×4000）的高熵 JPEG，接近真实相机文件大小（约 10MB），
-              每 5 张有一张带 EXIF 方向 6（竖拍），带拍摄时间、机型、光圈快门 ISO
+              每 5 张有一张带 EXIF 方向 6（竖拍），带拍摄时间、机型、光圈快门 ISO；
+              模拟相机 RAW+JPEG：每 4 张有一张带同名 .CR3（假数据），第 1 张还有 .xmp 侧车文件，
+              另有一张只有 RAW 没有 JPG 的 IMG_9001.CR3（macOS 上显示，其它平台隐藏）
 - 2024/旅行/ 小尺寸 JPEG，用来测试网格滚动；附带一个 Picasa 3 格式的 .picasa.ini（预置 3 个星标）
 - 杂项/      PNG、带透明度的 PNG、一张损坏的 JPEG
 """
@@ -61,6 +63,21 @@ def exif_for(i, orientation):
     return ex
 
 
+def make_raw_companions(folder, n):
+    """假的 RAW/XMP 文件：只需要文件名配对，内容不会被解码（有同名 JPG 时只显示 JPG）。"""
+    for i in range(1, n + 1, 4):
+        with open(os.path.join(folder, f"IMG_{i:04d}.CR3"), "wb") as fp:
+            fp.write(b"FAKE-CR3-" + str(i).encode() + os.urandom(64 * 1024))
+    with open(os.path.join(folder, "IMG_0001.xmp"), "w") as fp:
+        fp.write('<x:xmpmeta xmlns:x="adobe:ns:meta/"/>\n')
+    with open(os.path.join(folder, "IMG_9001.CR3"), "wb") as fp:
+        fp.write(b"FAKE-CR3-ONLY" + os.urandom(1024))
+
+
+if len(sys.argv) > 4 and sys.argv[4] == "--raw-only":
+    make_raw_companions(os.path.join(out, "大图"), n_big)
+    sys.exit(0)
+
 big = os.path.join(out, "大图")
 os.makedirs(big, exist_ok=True)
 for i in range(1, n_big + 1):
@@ -69,6 +86,8 @@ for i in range(1, n_big + 1):
     img = make(6000, 4000, i, f"#{i}" + (" ROT6" if orientation == 6 else ""))
     img.save(os.path.join(big, f"IMG_{i:04d}.JPG"), quality=92, exif=exif_for(i, orientation))
     print("big", i, flush=True)
+
+make_raw_companions(big, n_big)
 
 trip = os.path.join(out, "2024", "旅行")
 os.makedirs(trip, exist_ok=True)

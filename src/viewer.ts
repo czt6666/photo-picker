@@ -13,7 +13,7 @@
 // （停下 90ms 才加载），避免后端被一堆马上就会离开的请求塞满。
 
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { api, needsTranscode, photoUrl, thumbUrl } from './api';
+import { api, needsTranscode, photoUrl, rawTag, thumbUrl } from './api';
 import { ImageLoader } from './loader';
 import type { Photo, PhotoInfo } from './types';
 import { WheelStepper } from './wheel';
@@ -198,7 +198,8 @@ export class Viewer {
         this.step(-1);
         return true;
       case ' ':
-        this.step(e.shiftKey ? -1 : 1);
+        // 空格 = 加/取消星标（选片时最顺手的键）
+        void this.toggleStar();
         return true;
       case 'Home':
         this.go(0);
@@ -276,7 +277,9 @@ export class Viewer {
     clearTimeout(this.preTimer);
     clearTimeout(this.slowTimer);
 
-    this.nameEl.textContent = p.name;
+    // RAW+JPG：标题里注明同名 RAW，例如 “IMG_0001.JPG + CR3”
+    const tag = rawTag(p);
+    this.nameEl.textContent = tag ? `${p.name} + ${tag}` : p.name;
     this.posEl.textContent = `${i + 1} / ${this.list.length}`;
     this.refreshStar();
     this.strip.setCurrent(i);

@@ -13,12 +13,16 @@ use std::path::Path;
 /// 所有平台都能解码的格式（纯 Rust 解码器支持）。
 const COMMON: &[&str] = &["jpg", "jpeg", "jpe", "png", "webp", "gif", "bmp", "tif", "tiff"];
 
-/// 只有 macOS（ImageIO）能解码的格式。
-#[cfg(target_os = "macos")]
-const MAC_ONLY: &[&str] = &[
-    "heic", "heif", "avif", // 苹果设备常见格式
-    "cr2", "cr3", "nef", "nrw", "arw", "srf", "sr2", "dng", "raf", "orf", "rw2", "pef", "srw",
+/// 各家相机的 RAW 格式。与平台无关：即使当前平台解不了，也要认得出来，
+/// 好把它当作同名 JPG 的“伴侣文件”（见 [`is_companion`]）。
+pub const RAW: &[&str] = &[
+    "cr2", "cr3", "crw", "nef", "nrw", "arw", "srf", "sr2", "dng", "raf", "orf", "rw2", "rwl", "pef",
+    "srw", "x3f", "3fr", "fff", "iiq", "erf", "kdc", "mrw", "mos",
 ];
+
+/// 只有 macOS（ImageIO）能解码的格式：苹果设备常见的 HEIC/AVIF，以及所有 RAW。
+#[cfg(target_os = "macos")]
+const MAC_ONLY: &[&str] = &["heic", "heif", "avif"];
 #[cfg(not(target_os = "macos"))]
 const MAC_ONLY: &[&str] = &[];
 
@@ -43,10 +47,21 @@ pub fn ext_of(path: &Path) -> Option<String> {
 }
 
 pub fn is_supported(path: &Path) -> bool {
-    match ext_of(path) {
-        Some(e) => COMMON.contains(&e.as_str()) || MAC_ONLY.contains(&e.as_str()),
-        None => false,
-    }
+    ext_of(path).is_some_and(|e| is_supported_ext(&e))
+}
+
+pub fn is_supported_ext(ext: &str) -> bool {
+    COMMON.contains(&ext) || MAC_ONLY.contains(&ext) || (cfg!(target_os = "macos") && is_raw(ext))
+}
+
+pub fn is_raw(ext: &str) -> bool {
+    RAW.contains(&ext)
+}
+
+/// “伴侣文件”：和 JPG 同名时并进那张 JPG，不单独显示（像 Lightroom 的 RAW+JPEG）。
+/// 包括 RAW 本身，以及 Lightroom / Capture One 给 RAW 写的 .xmp 侧车文件。
+pub fn is_companion(ext: &str) -> bool {
+    is_raw(ext) || ext == "xmp"
 }
 
 pub fn is_web_native(ext: &str) -> bool {
@@ -92,6 +107,13 @@ mod tests {
         assert!(is_supported(Path::new("/a/x.Png")));
         assert!(!is_supported(Path::new("/a/notes.txt")));
         assert!(!is_supported(Path::new("/a/noext")));
+    }
+
+    #[test]
+    fn raw_is_companion_everywhere_but_supported_only_on_mac() {
+        assert!(is_companion("cr3") && is_companion("xmp") && !is_companion("jpg"));
+        assert_eq!(is_supported(Path::new("/a/IMG_1.CR3")), cfg!(target_os = "macos"));
+        assert!(!is_supported(Path::new("/a/IMG_1.xmp")));
     }
 
     #[test]

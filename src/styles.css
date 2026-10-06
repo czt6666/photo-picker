@@ -337,6 +337,20 @@ kbd {
 .badge:hover {
   transform: scale(1.15);
 }
+.raw-tag {
+  position: absolute;
+  right: 6px;
+  top: 6px;
+  padding: 0 4px;
+  border-radius: 3px;
+  font-size: 10px;
+  line-height: 15px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.6);
+  pointer-events: none;
+}
 .cell.starred .badge {
   opacity: 1;
   color: var(--star);
@@ -765,6 +779,53 @@ body.drop-target .content::after {
 }
 .menu button:hover:not(:disabled) {
   background: var(--accent);
+}
+.menu {
+  max-width: min(520px, calc(100vw - 16px));
+}
+.menu button {
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+  white-space: nowrap;
+}
+.menu-detail {
+  color: var(--text-dim);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.menu button:hover .menu-detail {
+  color: rgba(255, 255, 255, 0.8);
+}
+.menu-sep {
+  padding: 8px 10px 3px;
+  margin-top: 4px;
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.btn.workdir {
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sb-workdir {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 7px 12px;
+  margin: 0 6px 6px;
+  border-radius: 6px;
+  cursor: pointer;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+}
+.sb-workdir:hover {
+  border-color: var(--accent);
+}
+.sb-workdir .sb-name {
+  font-weight: 600;
 }
 
 .toasts {

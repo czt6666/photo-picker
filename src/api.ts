@@ -6,8 +6,8 @@ import type { CacheInfo, ExportRequest, ExportResult, Library, Photo, PhotoInfo,
 export const api = {
   getLibrary: () => invoke<Library>('get_library'),
   rescan: () => invoke<Library>('rescan'),
-  addRoot: (path: string) => invoke<Library>('add_root', { path }),
-  removeRoot: (path: string) => invoke<Library>('remove_root', { path }),
+  setWorkdir: (path: string) => invoke<Library>('set_workdir', { path }),
+  forgetWorkdir: (path: string) => invoke<Library>('forget_workdir', { path }),
   listFolder: (path: string) => invoke<Photo[]>('list_folder', { path }),
   listStarred: () => invoke<Photo[]>('list_starred'),
   setStar: (paths: string[], starred: boolean) => invoke<SetStarResult>('set_star', { paths, starred }),
@@ -34,10 +34,21 @@ export function photoUrl(p: Photo, max: number, urgent: boolean, force = false):
   return `${convertFileSrc(p.path, 'photo')}?v=${p.mtime}&max=${max}&p=${urgent ? 0 : 1}${force ? '&force=1' : ''}`;
 }
 
-const RAW_EXT = new Set(['cr2', 'cr3', 'nef', 'nrw', 'arw', 'srf', 'sr2', 'dng', 'raf', 'orf', 'rw2', 'pef', 'srw']);
+// 与 src-tauri/src/formats.rs 的 RAW 列表保持一致
+const RAW_EXT = new Set([
+  'cr2', 'cr3', 'crw', 'nef', 'nrw', 'arw', 'srf', 'sr2', 'dng', 'raf', 'orf', 'rw2', 'rwl', 'pef',
+  'srw', 'x3f', '3fr', 'fff', 'iiq', 'erf', 'kdc', 'mrw', 'mos',
+]);
+
+export const extOf = (name: string): string => (name.includes('.') ? name.split('.').pop()!.toLowerCase() : '');
 
 /** webview 肯定解不了、需要后端转码的格式 */
 export function needsTranscode(p: Photo): boolean {
-  const ext = p.name.split('.').pop()?.toLowerCase() ?? '';
-  return RAW_EXT.has(ext);
+  return RAW_EXT.has(extOf(p.name));
+}
+
+/** 伴侣文件里的 RAW 扩展名（大写），用于角标，如 "CR3"；没有 RAW 伴侣返回 '' */
+export function rawTag(p: Photo): string {
+  const raw = p.companions.find((c) => RAW_EXT.has(extOf(c)));
+  return raw ? extOf(raw).toUpperCase() : '';
 }

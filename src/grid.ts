@@ -7,7 +7,7 @@
 // 另一个细节：拖动滚动条飞速划过几千张时，中途经过的格子如果都去请求缩略图，
 // 后端会被一大堆马上就看不见的请求淹没。所以“高速滚动中”先不发请求，停下 100ms 再加载。
 
-import { thumbUrl } from './api';
+import { rawTag, thumbUrl } from './api';
 import { store } from './store';
 import type { Photo } from './types';
 
@@ -238,7 +238,8 @@ export class Grid {
   private createCell(): HTMLElement {
     const c = document.createElement('div');
     c.className = 'cell';
-    c.innerHTML = '<span class="frame"><img class="thumb" decoding="async" draggable="false" alt=""><button class="badge" tabindex="-1" title="星标（S）">★</button></span>';
+    c.innerHTML =
+      '<span class="frame"><img class="thumb" decoding="async" draggable="false" alt=""><button class="badge" tabindex="-1" title="星标（空格）">★</button><span class="raw-tag"></span></span>';
     const img = c.querySelector('img')!;
     img.addEventListener('load', () => c.classList.add('loaded'));
     img.addEventListener('error', () => {
@@ -255,7 +256,11 @@ export class Grid {
     c.style.height = `${this.size}px`;
     c.style.visibility = '';
     c.dataset.i = String(i);
-    c.title = p.name;
+    const tag = rawTag(p);
+    c.title = p.companions.length ? `${p.name}\n同名文件：${p.companions.join('、')}` : p.name;
+    const tagEl = c.querySelector<HTMLElement>('.raw-tag')!;
+    tagEl.textContent = tag;
+    tagEl.hidden = !tag;
     const img = c.querySelector('img')!;
     const url = thumbUrl(p);
     if (img.dataset.url !== url) {

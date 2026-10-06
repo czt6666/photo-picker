@@ -8,7 +8,7 @@ type Topic = 'library' | 'photos' | 'selection' | 'stars' | 'view';
 type Listener = () => void;
 
 class Store {
-  library: Library = { roots: [], folders: [] };
+  library: Library = { workdir: null, recent: [], folders: [] };
   view: View = { kind: 'none' };
   /** 当前视图（文件夹 / 星标相册）的全部照片 */
   all: Photo[] = [];
@@ -52,7 +52,8 @@ class Store {
     const q = this.query.trim().toLowerCase();
     // 星标相册里取消了星标的照片也要消失
     const onlyStar = this.starredOnly || this.view.kind === 'starred';
-    this.visible = this.all.filter((p) => (!onlyStar || p.starred) && (!q || p.name.toLowerCase().includes(q)));
+    const match = (p: Photo) => !q || p.name.toLowerCase().includes(q) || p.companions.some((c) => c.toLowerCase().includes(q));
+    this.visible = this.all.filter((p) => (!onlyStar || p.starred) && match(p));
     if (keepSelection) {
       const vis = new Set(this.visible.map((p) => p.path));
       for (const s of [...this.selection]) if (!vis.has(s)) this.selection.delete(s);

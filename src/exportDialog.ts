@@ -3,7 +3,7 @@
 import { listen } from '@tauri-apps/api/event';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { revealItemInDir } from '@tauri-apps/plugin-opener';
-import { api } from './api';
+import { api, rawTag } from './api';
 import { prefs, store } from './store';
 import type { ExportMode, Photo, Progress } from './types';
 import { esc, toast } from './ui';
@@ -15,6 +15,8 @@ interface ExportPrefs {
   mode: ExportMode;
   maxPx: number;
   quality: number;
+  /** 同时导出同名 RAW（旧版保存的偏好里没有这个字段 → 默认开） */
+  withRaw?: boolean;
 }
 
 const SIZES = [1280, 1600, 2048, 2560, 3840];
@@ -38,6 +40,12 @@ export function openExportDialog(): void {
   const inStarredView = store.view.kind === 'starred';
   const viewName =
     store.view.kind === 'folder' ? (store.folder(store.view.path)?.name ?? '') : inStarredView ? '星标照片' : '';
+
+  const withRawCount = (list: Photo[]) => list.filter((x) => rawTag(x)).length;
+  const rawHint =
+    store.view.kind === 'starred'
+      ? '星标相册里的照片会按各自文件夹里的同名 RAW 导出。'
+      : `当前相册的星标照片中有 ${withRawCount(viewStarred)} 张带 RAW；选中的照片中有 ${withRawCount(selected)} 张带 RAW。`;
 
   let scope: Scope = selected.length > 1 ? 'selected' : viewStarred.length ? 'view-starred' : 'all-starred';
   if (inStarredView && scope === 'view-starred') scope = 'all-starred';
@@ -79,6 +87,11 @@ export function openExportDialog(): void {
           像素，质量 <input type="range" class="quality" min="60" max="100" step="1" value="${p.quality}"> <span class="qv">${p.quality}</span>
         </label>
         <div class="hint dim">缩小导出会保留 JPEG 原图的拍摄时间、相机参数、GPS 等 EXIF 信息；比目标尺寸还小的 JPEG 直接复制。</div>
+      </div>
+      <div class="field">
+        <label class="opt"><input type="checkbox" class="with-raw" ${p.withRaw === false ? '' : 'checked'}>
+          同时导出同名的 RAW 文件（RAW+JPG 一起导出，RAW 总是原样复制）</label>
+        <div class="hint dim">${rawHint}</div>
       </div>
       <div class="progress" hidden>
         <div class="bar"><div class="fill"></div></div>
@@ -144,7 +157,8 @@ export function openExportDialog(): void {
     else photos = await api.listStarred();
     if (!photos.length) return toast('没有可导出的照片', 'warn');
 
-    const settings: ExportPrefs = { dest: dest.value, mode, maxPx: Number(maxpx.value), quality: Number(quality.value) };
+    const withRaw = $<HTMLInputElement>('.with-raw').checked;
+    const settings: ExportPrefs = { dest: dest.value, mode, maxPx: Number(maxpx.value), quality: Number(quality.value), withRaw };
     prefs.set('export', settings);
 
     running = true;
@@ -168,12 +182,14 @@ export function openExportDialog(): void {
         mode,
         maxPx: settings.maxPx,
         quality: settings.quality,
+        includeCompanions: withRaw,
       });
       fill.style.width = '100%';
       const failed = r.failed.length
         ? `，${r.failed.length} 张失败：${r.failed.slice(0, 3).map((f) => `${f.path.split(/[\\/]/).pop()}（${f.error}）`).join('；')}`
         : '';
-      ptext.innerHTML = `${r.cancelled ? '已停止。' : '完成！'}导出了 <b>${r.exported}</b> 张${esc(failed)}<br><span class="path">${esc(r.dest)}</span>`;
+      const extra = r.files > r.exported ? `（共 ${r.files} 个文件，含同名 RAW）` : '';
+      ptext.innerHTML = `${r.cancelled ? '已停止。' : '完成！'}导出了 <b>${r.exported}</b> 张${extra}${esc(failed)}<br><span class="path">${esc(r.dest)}</span>`;
       const reveal = document.createElement('button');
       reveal.className = 'btn';
       reveal.textContent = '在访达中显示';

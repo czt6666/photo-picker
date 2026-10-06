@@ -5,7 +5,10 @@
 //! - **缩小**：长边缩到指定像素、按指定质量存成 JPEG，并保留原图的 EXIF（拍摄时间、GPS、参数）
 //!   和 ICC 色彩配置。原图本来就不大于目标尺寸的 JPEG 直接复制，避免无谓的二次压缩。
 //!
-//! 重名时自动改名为 `名字 (1).jpg`。多张缩图并行处理。
+//! **RAW+JPG**：默认把同名的 RAW（和 .xmp）一起导出，RAW 始终原样复制（RAW 没法“缩小”）。
+//!
+//! 重名时自动改名为 `名字 (1).jpg`；成组的文件一起改名（`IMG_1 (1).JPG` + `IMG_1 (1).CR3`），
+//! 保证导出后 RAW 和 JPG 依然同名配对。多张缩图并行处理。
 
 use std::collections::HashSet;
 use std::fs;
@@ -18,6 +21,7 @@ use serde::{Deserialize, Serialize};
 use crate::decode::render_jpeg;
 use crate::formats::{ext_of, is_jpeg};
 use crate::meta::{read_jpeg_head, transplant_metadata};
+use crate::scan::{companions_of, split_group_stem};
 
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -39,6 +43,13 @@ pub struct ExportRequest {
     pub max_px: u32,
     #[serde(default = "default_quality")]
     pub quality: u8,
+    /// 同时导出同名的 RAW / xmp 文件
+    #[serde(default = "default_true")]
+    pub include_companions: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 fn default_max_px() -> u32 {
@@ -63,7 +74,10 @@ pub struct ExportFailure {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ExportResult {
+    /// 导出的照片数（RAW+JPG 算一张）
     pub exported: usize,
+    /// 实际写出的文件数（含 RAW 等伴侣文件）
+    pub files: usize,
     pub failed: Vec<ExportFailure>,
     pub dest: String,
     pub cancelled: bool,
@@ -79,21 +93,28 @@ fn sanitize(name: &str) -> String {
         .to_string()
 }
 
-/// 找一个不冲突的目标路径：a.jpg → a (1).jpg → a (2).jpg …
-fn unique_target(dir: &Path, stem: &str, ext: &str, reserved: &mut HashSet<PathBuf>) -> PathBuf {
-    let make = |n: usize| {
-        let name = if n == 0 { format!("{stem}.{ext}") } else { format!("{stem} ({n}).{ext}") };
-        dir.join(name)
-    };
+/// 为一组文件找一套不冲突的目标路径。`tails` 是每个文件名去掉组名后的部分（如 `.JPG`、`.CR3`、`.CR3.xmp`）。
+/// 不冲突时用原名；有任何一个冲突，整组一起改成 `组名 (n)` + 各自的后缀：a.jpg → a (1).jpg → a (2).jpg …
+fn unique_targets(dir: &Path, stem: &str, tails: &[String], reserved: &mut HashSet<PathBuf>) -> Vec<PathBuf> {
     let mut n = 0;
     loop {
-        let p = make(n);
-        if !p.exists() && !reserved.contains(&p) {
-            reserved.insert(p.clone());
-            return p;
+        let base = if n == 0 { stem.to_string() } else { format!("{stem} ({n})") };
+        let paths: Vec<PathBuf> = tails.iter().map(|t| dir.join(format!("{base}{t}"))).collect();
+        if paths.iter().all(|p| !p.exists() && !reserved.contains(p)) {
+            reserved.extend(paths.iter().cloned());
+            return paths;
         }
         n += 1;
     }
+}
+
+struct PlanItem {
+    src: PathBuf,
+    target: PathBuf,
+    /// true = 直接复制；false = 缩小重新编码
+    copy: bool,
+    /// 伴侣文件（源, 目标），总是原样复制
+    companions: Vec<(PathBuf, PathBuf)>,
 }
 
 pub fn run_export(
@@ -110,7 +131,7 @@ pub fn run_export(
 
     // 先串行地为每张图分配好目标文件名，后面并行处理时就不会抢同一个名字
     let mut reserved = HashSet::new();
-    let mut plan: Vec<(PathBuf, PathBuf, bool)> = Vec::new(); // (源, 目标, 是否直接复制)
+    let mut plan: Vec<PlanItem> = Vec::new();
     let mut failed = Vec::new();
     for p in &req.paths {
         let src = PathBuf::from(p);
@@ -122,24 +143,33 @@ pub fn run_export(
             failed.push(ExportFailure { path: p.clone(), error: "源文件已在目标文件夹中".into() });
             continue;
         }
-        let stem = src.file_stem().unwrap_or_default().to_string_lossy().into_owned();
+        let name = src.file_name().unwrap_or_default().to_string_lossy().into_owned();
+        let (stem, tail) = split_group_stem(&name);
         let ext = ext_of(&src).unwrap_or_default();
         let copy = match req.mode {
             ExportMode::Original => true,
             ExportMode::Resize => is_jpeg(&ext) && long_edge(&src).is_some_and(|l| l <= req.max_px),
         };
-        let out_ext = if copy {
-            src.extension().unwrap_or_default().to_string_lossy().into_owned()
+        let mut tails = vec![if copy { tail.to_string() } else { ".jpg".to_string() }];
+        let companions: Vec<PathBuf> = if req.include_companions {
+            let dir = src.parent().unwrap_or(Path::new(""));
+            companions_of(&src).into_iter().map(|c| dir.join(c)).collect()
         } else {
-            "jpg".to_string()
+            Vec::new()
         };
-        let target = unique_target(&dest, &stem, &out_ext, &mut reserved);
-        plan.push((src, target, copy));
+        for c in &companions {
+            let cname = c.file_name().unwrap_or_default().to_string_lossy();
+            tails.push(split_group_stem(&cname).1.to_string());
+        }
+        let mut targets = unique_targets(&dest, stem, &tails, &mut reserved).into_iter();
+        let target = targets.next().expect("至少有主文件");
+        plan.push(PlanItem { src, target, copy, companions: companions.into_iter().zip(targets).collect() });
     }
 
     let total = req.paths.len();
     let done = AtomicUsize::new(failed.len());
     let exported = AtomicUsize::new(0);
+    let files = AtomicUsize::new(0);
     let failed = Mutex::new(failed);
     let next = AtomicUsize::new(0);
     // 原图复制是磁盘 IO，开太多线程反而互相抢；缩图是 CPU 活，按核数开
@@ -155,15 +185,28 @@ pub fn run_export(
                     return;
                 }
                 let i = next.fetch_add(1, Ordering::SeqCst);
-                let Some((src, target, copy)) = plan.get(i) else { return };
-                let r = if *copy { copy_original(src, target) } else { resize_one(src, target, req.max_px, req.quality) };
+                let Some(item) = plan.get(i) else { return };
+                let (src, target) = (&item.src, &item.target);
+                let r = if item.copy { copy_original(src, target) } else { resize_one(src, target, req.max_px, req.quality) };
                 match r {
                     Ok(()) => {
                         exported.fetch_add(1, Ordering::SeqCst);
+                        files.fetch_add(1, Ordering::SeqCst);
                     }
                     Err(e) => {
                         let _ = fs::remove_file(target);
                         failed.lock().push(ExportFailure { path: src.to_string_lossy().into_owned(), error: e });
+                    }
+                }
+                for (csrc, ctarget) in &item.companions {
+                    match copy_original(csrc, ctarget) {
+                        Ok(()) => {
+                            files.fetch_add(1, Ordering::SeqCst);
+                        }
+                        Err(e) => {
+                            let _ = fs::remove_file(ctarget);
+                            failed.lock().push(ExportFailure { path: csrc.to_string_lossy().into_owned(), error: e });
+                        }
                     }
                 }
                 let d = done.fetch_add(1, Ordering::SeqCst) + 1;
@@ -178,6 +221,7 @@ pub fn run_export(
 
     Ok(ExportResult {
         exported: exported.into_inner(),
+        files: files.into_inner(),
         failed: failed.into_inner(),
         dest: dest.to_string_lossy().into_owned(),
         cancelled: cancel.load(Ordering::Relaxed),
@@ -223,6 +267,7 @@ mod tests {
             mode,
             max_px: 1000,
             quality: 85,
+            include_companions: true,
         }
     }
 
@@ -270,6 +315,41 @@ mod tests {
         assert_eq!(exif.get_field(exif::Tag::Orientation, exif::In::PRIMARY).unwrap().value.get_uint(0), Some(1));
         // 小图原样复制
         assert_eq!(fs::read(dir.join("small.jpg")).unwrap(), fs::read(&small).unwrap());
+    }
+
+    #[test]
+    fn exports_raw_with_jpg_and_keeps_pairs_matched_on_rename() {
+        let a = tempfile::tempdir().unwrap();
+        let out = tempfile::tempdir().unwrap();
+        let jpg = a.path().join("IMG_1.JPG");
+        fs::write(&jpg, make_jpeg(3000, 2000)).unwrap();
+        fs::write(a.path().join("IMG_1.CR3"), b"raw-bytes").unwrap();
+        fs::write(a.path().join("IMG_1.CR3.xmp"), b"<xmp/>").unwrap();
+        // 目标文件夹里已有一个同名 RAW：整组都要改名，不能只改 JPG
+        fs::write(out.path().join("IMG_1.CR3"), b"old").unwrap();
+
+        let r = run_export(&req(&[&jpg], out.path(), ExportMode::Original), &AtomicBool::new(false), &|_| {}).unwrap();
+        assert_eq!((r.exported, r.files), (1, 3), "{:?}", r.failed);
+        let mut names: Vec<_> = fs::read_dir(out.path()).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).collect();
+        names.sort();
+        assert_eq!(names, vec!["IMG_1 (1).CR3", "IMG_1 (1).CR3.xmp", "IMG_1 (1).JPG", "IMG_1.CR3"]);
+        assert_eq!(fs::read(out.path().join("IMG_1 (1).CR3")).unwrap(), b"raw-bytes");
+        assert_eq!(fs::read(out.path().join("IMG_1.CR3")).unwrap(), b"old", "已有文件不能被覆盖");
+
+        // 缩小导出：JPG 缩小成 .jpg，RAW 原样复制，仍然同名
+        let mut rq = req(&[&jpg], &out.path().join("small"), ExportMode::Resize);
+        rq.max_px = 800;
+        let r = run_export(&rq, &AtomicBool::new(false), &|_| {}).unwrap();
+        assert_eq!((r.exported, r.files), (1, 3));
+        assert!(out.path().join("small/IMG_1.jpg").exists());
+        assert_eq!(fs::read(out.path().join("small/IMG_1.CR3")).unwrap(), b"raw-bytes");
+
+        // 关掉“同时导出 RAW”
+        let mut rq = req(&[&jpg], &out.path().join("jpg-only"), ExportMode::Original);
+        rq.include_companions = false;
+        let r = run_export(&rq, &AtomicBool::new(false), &|_| {}).unwrap();
+        assert_eq!((r.exported, r.files), (1, 1));
+        assert!(!out.path().join("jpg-only/IMG_1.CR3").exists());
     }
 
     #[test]

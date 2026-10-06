@@ -23,6 +23,7 @@ from pathlib import Path
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.action_chains import ActionChains
+from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.common.options import ArgOptions
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -62,7 +63,7 @@ def main():
     SHOTS.mkdir(parents=True)
     cfg = HOME / ".config" / IDENT
     cfg.mkdir(parents=True)
-    (cfg / "settings.json").write_text(json.dumps({"roots": [str(PHOTOS)]}))
+    (cfg / "settings.json").write_text(json.dumps({"workdir": str(PHOTOS)}))
     # 每次从干净的 .picasa.ini 开始
     ini = PHOTOS / "2024" / "旅行" / ".picasa.ini"
     ini_backup = WORK / "picasa.ini.orig"
@@ -133,6 +134,8 @@ def run(d, env, export_dir):
     check("从 Picasa 的 .picasa.ini 读到 3 个星标", "★3" in trip, trip)
     starred_total = d.find_element(By.CSS_SELECTOR, ".sb-starred .count").text
     check("“已加星标的照片”合计 3", starred_total == "3", starred_total)
+    wd = js(d, "return document.querySelector('.sb-workdir').innerText.replace(/\\s+/g, ' ')")
+    check("侧栏显示工作目录及相册数", "photos" in wd and "3 个相册" in wd, wd)
 
     # ---------- 网格 ----------
     open_folder(d, "旅行")
@@ -160,22 +163,22 @@ def run(d, env, export_dir):
     d.find_element(By.CSS_SELECTOR, ".toggle-ui").click()
     wait(lambda: "300 张" in d.find_element(By.ID, "status-count").text)
 
-    # 选中第 1 张，按 S 加星；Shift+→ 连选，再按 S
+    # 选中第 1 张，按空格加星；Shift+→ 连选，再按 S（S 也保留）
     first = wait(lambda: d.find_element(By.CSS_SELECTOR, '.cell[data-i="0"]'))
     first.click()
-    ActionChains(d).send_keys("s").perform()
+    ActionChains(d).send_keys(Keys.SPACE).perform()
     ini = PHOTOS / "2024" / "旅行" / ".picasa.ini"
     ok = wait(lambda: b"[DSC_1.jpg]\r\nstar=yes\r\n" in ini.read_bytes(), timeout=5)
-    check("按 S 加星标 → 写入 .picasa.ini（保持 CRLF、保留原有内容）", ok and "faces=rect64" in ini.read_text())
+    check("按空格加星标 → 写入 .picasa.ini（保持 CRLF、保留原有内容）", ok and "faces=rect64" in ini.read_text())
     ActionChains(d).key_down("").send_keys("").send_keys("").key_up("").perform()  # Shift+→→
     sel = d.find_element(By.ID, "status-count").text
     check("Shift+方向键连选 3 张", "已选 3 张" in sel, sel)
     ActionChains(d).send_keys("s").perform()  # 有没加星的 → 全部加星
     ok = wait(lambda: all(f"[DSC_{k}.jpg]" in ini.read_text() for k in (1, 2, 3)) and ini.read_text().count("star=yes") == 5)
     check("多选按 S：全部加星（Picasa 语义）", ok, ini.read_text().replace("\r\n", " | "))
-    ActionChains(d).send_keys("s").perform()  # 全部已加星 → 全部取消
+    ActionChains(d).send_keys(Keys.SPACE).perform()  # 全部已加星 → 全部取消
     ok = wait(lambda: ini.read_text().count("star=yes") == 2)
-    check("再按 S：全部取消星标，原有 faces 等字段保留", ok and "faces=rect64" in ini.read_text(), ini.read_text().replace("\r\n", " | "))
+    check("再按空格：全部取消星标，原有 faces 等字段保留", ok and "faces=rect64" in ini.read_text(), ini.read_text().replace("\r\n", " | "))
     side = wait(lambda: d.find_element(By.CSS_SELECTOR, ".sb-starred .count").text == "2")
     check("侧栏星标总数随之更新", side)
 
@@ -185,9 +188,15 @@ def run(d, env, export_dir):
     wait(lambda: len(d.find_elements(By.CSS_SELECTOR, ".cell.loaded")) >= 10, timeout=60)
     # 等后台把 40 张缩略图都生成完，再测翻页（模拟“打开文件夹看了一会儿”）
     wait(lambda: d.find_element(By.ID, "status-thumbs").text == "", timeout=120, interval=0.5)
+    # RAW+JPG：40 张 JPG 里有 10 张带同名 CR3；另有一张只有 RAW 的 IMG_9001.CR3（Linux 上解不了 → 不显示）
+    count_text = d.find_element(By.ID, "status-count").text
+    tags = js(d, "return [...document.querySelectorAll('.cell')].filter(c => c.style.visibility !== 'hidden' && !c.querySelector('.raw-tag').hidden).map(c => c.dataset.i + ':' + c.querySelector('.raw-tag').textContent)")
+    check("RAW+JPG 合并：同名 RAW 不单独显示，JPG 角标显示 CR3", count_text.startswith("40 张") and "0:CR3" in tags and "4:CR3" in tags and "1:CR3" not in tags, f"{count_text} {tags}")
     ActionChains(d).double_click(d.find_element(By.CSS_SELECTOR, '.cell[data-i="0"]')).perform()
     ok = wait(lambda: js(d, "const m = document.querySelector('.v-main'); return !!(m && m.naturalWidth)"), timeout=30)
     check("双击打开看图器，显示清晰图", ok)
+    title = d.find_element(By.CSS_SELECTOR, ".v-name").text
+    check("看图器标题标注同名 RAW", title == "IMG_0001.JPG + CR3", title)
     nat = js(d, "const m = document.querySelector('.v-main'); return [m.naturalWidth, m.naturalHeight]")
     stage = js(d, "const s = document.querySelector('.v-stage'); return [s.clientWidth, s.clientHeight, devicePixelRatio]")
     check("看图用的是屏幕尺寸预览，不是 6000px 原图", nat and nat[0] < 6000, f"预览 {nat}，舞台 {stage}")
@@ -237,11 +246,11 @@ def run(d, env, export_dir):
     d.save_screenshot(str(SHOTS / "05-zoom.png"))
     ActionChains(d).send_keys("").perform()  # Esc → 回到适合窗口
 
-    # 看图时加星标
-    ActionChains(d).send_keys("s").perform()
+    # 看图时按空格加星标；IMG_0005 带 CR3，两个文件都要打上星
+    ActionChains(d).send_keys(Keys.SPACE).perform()
     big_ini = PHOTOS / "大图" / ".picasa.ini"
-    ok = wait(lambda: big_ini.exists() and "[IMG_0005.JPG]" in big_ini.read_text(), timeout=5)
-    check("看图器里按 S 加星标", ok)
+    ok = wait(lambda: big_ini.exists() and "[IMG_0005.JPG]\nstar=yes" in big_ini.read_text() and "[IMG_0005.CR3]\nstar=yes" in big_ini.read_text(), timeout=5)
+    check("看图器里按空格加星标（JPG 和同名 CR3 一起）", ok, big_ini.read_text().replace("\n", " | ") if big_ini.exists() else "无 .picasa.ini")
     starmark = js(d, "return !document.querySelector('.v-starmark').hidden")
     check("看图器显示星标标记", starmark)
     d.save_screenshot(str(SHOTS / "06-viewer-starred.png"))
@@ -267,7 +276,11 @@ def run(d, env, export_dir):
     d.find_element(By.CSS_SELECTOR, "#export-dialog .go").click()
     ok = wait(lambda: "完成" in d.find_element(By.CSS_SELECTOR, "#export-dialog .ptext").text, timeout=60)
     out = sorted(p.name for p in (export_dir / "精选").glob("*")) if (export_dir / "精选").exists() else []
-    check("导出全部星标照片（缩小到 2048）", ok and len(out) == 3, str(out))
+    check("导出全部星标照片（缩小到 2048），同名 CR3 一起导出", out == ["DSC_10.jpg", "DSC_25.jpg", "IMG_0005.CR3", "IMG_0005.jpg"], str(out))
+    if "IMG_0005.CR3" in out:
+        check("RAW 原样复制（字节一致）", (export_dir / "精选" / "IMG_0005.CR3").read_bytes() == (PHOTOS / "大图" / "IMG_0005.CR3").read_bytes())
+    done_text = d.find_element(By.CSS_SELECTOR, "#export-dialog .ptext").text
+    check("导出完成提示里写明文件数", "3 张" in done_text and "4 个文件" in done_text, done_text)
     d.save_screenshot(str(SHOTS / "09-export-done.png"))
     if out:
         from PIL import Image
@@ -280,6 +293,7 @@ def run(d, env, export_dir):
     r = invoke(d, "export_photos", {"request": {"paths": [str(PHOTOS / "大图" / "IMG_0001.JPG")], "dest": str(export_dir), "mode": "original"}})
     same = (export_dir / "IMG_0001.JPG").read_bytes() == (PHOTOS / "大图" / "IMG_0001.JPG").read_bytes() if (export_dir / "IMG_0001.JPG").exists() else False
     check("原图导出：字节完全一致", r.get("ok") and same, str(r)[:200])
+    check("原图导出默认带上同名 RAW 和 xmp", (export_dir / "IMG_0001.CR3").exists() and (export_dir / "IMG_0001.xmp").exists() and r.get("ok", {}).get("files") == 3, str(r)[:200])
 
     # 越权访问被拒绝
     probe = ("const [p, done] = arguments; const img = new Image();"
@@ -302,6 +316,23 @@ def run(d, env, export_dir):
     ActionChains(d).send_keys("\ue00c").perform()
     closed = wait(lambda: d.find_element(By.ID, "export-dialog").get_attribute("hidden") is not None)
     check("按 ? 打开快捷键帮助，Esc 关闭", ok and closed)
+
+    # ---------- 工作目录切换 ----------
+    sub = str(PHOTOS / "2024")
+    r = invoke(d, "set_workdir", {"path": sub})
+    check("切换工作目录：只扫描新目录下的相册", r.get("ok") and [f["name"] for f in r["ok"]["folders"]] == ["旅行"], str(r)[:200])
+    d.refresh()
+    ok = wait(lambda: js(d, "return document.querySelectorAll('.sb-item[data-path]').length") == 1 and "300 张" in d.find_element(By.ID, "status-count").text, timeout=30)
+    btn = js(d, "return document.getElementById('btn-workdir').textContent")
+    status = js(d, "return document.getElementById('status-count').textContent")
+    check("重启后记住工作目录，工具栏显示目录名", ok and "2024" in btn, f"ok={ok} btn={btn} status={status}")
+    d.find_element(By.ID, "btn-workdir").click()
+    menu = wait(lambda: js(d, "return [...document.querySelectorAll('.menu button')].map(b => b.innerText.replace(/\\s+/g, ' '))"))
+    d.save_screenshot(str(SHOTS / "11-workdir-menu.png"))
+    check("工作目录菜单列出最近用过的目录", menu and any(m.startswith("photos") for m in menu), str(menu))
+    js(d, "[...document.querySelectorAll('.menu button')].find(b => b.innerText.startsWith('photos')).click()")
+    ok = wait(lambda: js(d, "return document.querySelectorAll('.sb-item[data-path]').length") == 3, timeout=30)
+    check("从“最近”切回原工作目录，3 个相册都回来了", ok)
 
 
 if __name__ == "__main__":

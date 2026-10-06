@@ -7,7 +7,7 @@ import { revealItemInDir } from '@tauri-apps/plugin-opener';
 import { api } from './api';
 import { closeExportDialog, isExportOpen, openExportDialog } from './exportDialog';
 import { Grid } from './grid';
-import { Sidebar } from './sidebar';
+import { baseName, Sidebar } from './sidebar';
 import { prefs, store, type View } from './store';
 import type { Library, Photo, Progress } from './types';
 import { closeMenu, contextMenu, esc, toast } from './ui';
@@ -53,21 +53,10 @@ const sidebar = new Sidebar($('sidebar'), {
   folderMenu(path, x, y) {
     contextMenu(x, y, [
       { label: '在访达中显示', action: () => void revealItemInDir(path).catch(() => {}) },
-      { label: '重新扫描图库', action: () => void rescan() },
+      { label: '重新扫描工作目录', action: () => void rescan() },
     ]);
   },
-  rootMenu(root, x, y) {
-    contextMenu(x, y, [
-      { label: '在访达中显示', action: () => void revealItemInDir(root).catch(() => {}) },
-      {
-        label: '从图库移除（不删除文件）',
-        action: async () => {
-          setLibrary(await api.removeRoot(root));
-          if (store.view.kind === 'folder' && store.view.path.startsWith(root)) showEmptyView();
-        },
-      },
-    ]);
-  },
+  workdirMenu: (x, y) => showWorkdirMenu(x, y),
 });
 
 // ---------------------------------------------------------------------------
@@ -77,6 +66,9 @@ const sidebar = new Sidebar($('sidebar'), {
 function setLibrary(lib: Library): void {
   store.setLibrary(lib);
   sidebar.render();
+  const wd = lib.workdir;
+  workdirBtn.textContent = wd ? `📁 ${baseName(wd)} ▾` : '📁 选择工作目录…';
+  workdirBtn.title = wd ? `工作目录：${wd}\n点击切换（⌘O）` : '选择一个文件夹作为工作目录，扫描它下面的所有相册（⌘O）';
 }
 
 let viewSeq = 0;
@@ -92,7 +84,7 @@ async function showView(view: View, load: () => Promise<Photo[]>): Promise<void>
   }
   if (seq !== viewSeq) return; // 用户已经点了别的文件夹
   store.setPhotos(view, photos);
-  prefs.set('lastView', view);
+  if (store.library.workdir) prefs.set(`lastView:${store.library.workdir}`, view);
   sidebar.render();
   grid.reset();
   renderChrome();
@@ -132,24 +124,28 @@ function renderChrome(): void {
 
 function renderEmpty(): void {
   let html = '';
-  if (!store.library.roots.length) {
+  if (!store.library.workdir) {
     html = `<div class="empty-card">
       <div class="big">📁</div>
-      <h2>还没有添加照片文件夹</h2>
-      <p class="dim">添加一个文件夹，它和它的子文件夹里的照片都会出现在左侧。<br>也可以直接把文件夹拖进这个窗口。</p>
-      <button class="btn primary" id="empty-add">＋ 添加文件夹</button></div>`;
+      <h2>先选择一个工作目录</h2>
+      <p class="dim">比如“图片”或某次拍摄的文件夹。它下面所有含照片的子文件夹都会作为相册列在左侧。<br>也可以直接把文件夹拖进这个窗口。</p>
+      <button class="btn primary" id="empty-add">选择工作目录…</button></div>`;
+  } else if (!store.library.folders.length) {
+    html = `<div class="empty-card"><h2>这个工作目录下没有找到照片</h2>
+      <p class="dim">${esc(store.library.workdir)}</p>
+      <button class="btn primary" id="empty-add">换一个工作目录…</button></div>`;
   } else if (store.view.kind === 'none') {
-    html = '<div class="empty-card"><p class="dim">从左侧选择一个文件夹</p></div>';
+    html = '<div class="empty-card"><p class="dim">从左侧选择一个相册</p></div>';
   } else if (!store.visible.length) {
-    if (store.view.kind === 'starred') html = '<div class="empty-card"><h2>还没有星标照片</h2><p class="dim">看照片时按 <kbd>S</kbd> 加星标，所有星标照片都会汇总到这里。</p></div>';
+    if (store.view.kind === 'starred') html = '<div class="empty-card"><h2>还没有星标照片</h2><p class="dim">看照片时按 <kbd>空格</kbd> 加星标，工作目录里所有星标照片都会汇总到这里。</p></div>';
     else if (store.query) html = `<div class="empty-card"><p class="dim">没有文件名包含“${esc(store.query)}”的照片</p></div>`;
-    else if (store.starredOnly) html = '<div class="empty-card"><h2>这个文件夹里还没有星标照片</h2><p class="dim">取消“仅显示星标”，选中照片后按 <kbd>S</kbd> 加星标。</p></div>';
+    else if (store.starredOnly) html = '<div class="empty-card"><h2>这个相册里还没有星标照片</h2><p class="dim">取消“仅显示星标”，选中照片后按 <kbd>空格</kbd> 加星标。</p></div>';
     else html = '<div class="empty-card"><p class="dim">这个文件夹里没有照片</p></div>';
   }
   emptyEl.innerHTML = html;
   emptyEl.hidden = !html;
   gridEl.hidden = !!html;
-  emptyEl.querySelector('#empty-add')?.addEventListener('click', () => void addFolders());
+  emptyEl.querySelector('#empty-add')?.addEventListener('click', () => void chooseWorkdir());
 }
 
 function updateStatus(): void {
@@ -222,42 +218,83 @@ async function toggleStar(photos: Photo[]): Promise<void> {
 // 图库管理
 // ---------------------------------------------------------------------------
 
-async function addFolders(paths?: string[]): Promise<void> {
-  if (!paths) {
-    const picked = await openDialog({ directory: true, multiple: true, title: '添加照片文件夹' });
-    if (!picked) return;
-    paths = Array.isArray(picked) ? picked : [picked];
+/** 弹出系统的选择文件夹对话框，选好后切换工作目录 */
+async function chooseWorkdir(): Promise<void> {
+  const picked = await openDialog({
+    directory: true,
+    multiple: false,
+    title: '选择工作目录（会扫描它下面的所有相册）',
+    defaultPath: store.library.workdir ?? undefined,
+  });
+  if (typeof picked === 'string') await switchWorkdir(picked);
+}
+
+/** 切换工作目录：扫描它下面所有含照片的子文件夹（相册），打开上次看的或第一个相册 */
+async function switchWorkdir(path: string): Promise<void> {
+  toast(`正在扫描 ${baseName(path)} …`);
+  let lib: Library;
+  try {
+    lib = await api.setWorkdir(path);
+  } catch (e) {
+    toast(`无法打开：${e}`, 'error', 4000);
+    return;
   }
-  let lib: Library | null = null;
-  for (const p of paths) {
-    toast(`正在扫描 ${p} …`);
-    try {
-      lib = await api.addRoot(p);
-    } catch (e) {
-      toast(`无法添加 ${p}：${e}`, 'error');
-    }
-  }
-  if (!lib) return;
   setLibrary(lib);
-  // 打开刚添加的文件夹里的第一个相册
-  const first = lib.folders.find((f) => paths!.some((p) => f.path.startsWith(p)));
-  if (first) await openFolder(first.path);
-  else toast('这个文件夹里没有找到支持的照片', 'warn');
+  await openInitialView(lib);
+  if (lib.folders.length) {
+    const n = lib.folders.reduce((s, f) => s + f.count, 0);
+    toast(`找到 ${lib.folders.length} 个相册，共 ${n} 张照片`);
+  }
+}
+
+/** 打开该工作目录上次看的相册；没有就打开第一个 */
+async function openInitialView(lib: Library): Promise<void> {
+  const last = lib.workdir ? prefs.get<View>(`lastView:${lib.workdir}`, { kind: 'none' }) : { kind: 'none' as const };
+  if (last.kind === 'starred') await openStarred();
+  else if (last.kind === 'folder' && lib.folders.some((f) => f.path === last.path)) await openFolder(last.path);
+  else if (lib.folders.length) await openFolder(lib.folders[0].path);
+  else showEmptyView();
+}
+
+/** 太长的路径只保留后半段：…/2024/旅行 */
+function shortPath(p: string, max = 46): string {
+  return p.length <= max ? p : `…${p.slice(p.length - max + 1)}`;
+}
+
+function showWorkdirMenu(x: number, y: number): void {
+  const { workdir, recent } = store.library;
+  const others = recent.filter((r) => r !== workdir);
+  contextMenu(x, y, [
+    { label: '选择工作目录…', detail: '⌘O', action: () => void chooseWorkdir() },
+    ...(workdir
+      ? [
+          { label: '重新扫描', action: () => void rescan() },
+          { label: '在访达中显示', action: () => void revealItemInDir(workdir).catch(() => {}) },
+        ]
+      : []),
+    ...(others.length ? [{ separator: true, label: '最近的工作目录', action: () => {} }] : []),
+    ...others.map((r) => ({ label: baseName(r), detail: shortPath(r), action: () => void switchWorkdir(r) })),
+  ]);
 }
 
 async function rescan(): Promise<void> {
-  toast('正在重新扫描图库…');
+  toast('正在重新扫描工作目录…');
   setLibrary(await api.rescan());
   const v = store.view;
-  if (v.kind === 'folder') await openFolder(v.path);
+  if (v.kind === 'folder' && store.folder(v.path)) await openFolder(v.path);
   else if (v.kind === 'starred') await openStarred();
+  else await openInitialView(store.library);
 }
 
 // ---------------------------------------------------------------------------
 // 工具栏 / 状态栏
 // ---------------------------------------------------------------------------
 
-$('btn-add').addEventListener('click', () => void addFolders());
+const workdirBtn = $<HTMLButtonElement>('btn-workdir');
+workdirBtn.addEventListener('click', () => {
+  const r = workdirBtn.getBoundingClientRect();
+  showWorkdirMenu(r.left, r.bottom + 4);
+});
 $('btn-rescan').addEventListener('click', () => void rescan());
 $('btn-export').addEventListener('click', () => openExportDialog());
 starBtn.addEventListener('click', () => void toggleStar(starTargets()));
@@ -316,15 +353,16 @@ const HELP = [
   ['方向键 / Shift+方向键', '移动 / 连选'],
   ['⌘ 点击、Shift 点击', '多选 / 范围选择'],
   ['⌘A', '全选'],
-  ['回车、空格、双击', '看大图'],
-  ['S 或 ⌘8', '加 / 取消星标（多选时：有未加星的就全部加星）'],
+  ['回车、双击', '看大图'],
+  ['空格（或 S、⌘8）', '加 / 取消星标（多选时：有未加星的就全部加星）'],
   ['Shift+S', '仅显示星标 开 / 关'],
   ['⌘E', '导出'],
   ['⌘F', '搜索文件名'],
+  ['⌘O', '选择 / 切换工作目录'],
   ['捏合 / ⌘+滚轮', '缩略图大小'],
   ['看大图', ''],
-  ['滚轮、← →、空格', '上一张 / 下一张'],
-  ['S 或 ⌘8', '加 / 取消星标'],
+  ['滚轮、← →', '上一张 / 下一张'],
+  ['空格（或 S、⌘8）', '加 / 取消星标'],
   ['1、Z、双击', '适合窗口 ↔ 1:1 实际像素'],
   ['捏合 / ⌘+滚轮', '缩放；放大后拖动或滚动可平移'],
   ['F', '全屏'],
@@ -380,7 +418,8 @@ void listen<Progress>('thumb-progress', (e) => {
 void getCurrentWebview()
   .onDragDropEvent((e) => {
     document.body.classList.toggle('drop-target', e.payload.type === 'over' || e.payload.type === 'enter');
-    if (e.payload.type === 'drop' && e.payload.paths.length) void addFolders(e.payload.paths);
+    // 拖进来一个文件夹（或其中的照片）= 把它设为工作目录
+    if (e.payload.type === 'drop' && e.payload.paths.length) void switchWorkdir(e.payload.paths[0]);
   })
   .catch(() => {});
 
@@ -415,7 +454,7 @@ window.addEventListener('keydown', (e) => {
   else if (mod && k === '8') void toggleStar(starTargets());
   else if (mod && k.toLowerCase() === 'e') openExportDialog();
   else if (mod && k.toLowerCase() === 'f') search.focus();
-  else if (mod && k.toLowerCase() === 'o') void addFolders();
+  else if (mod && k.toLowerCase() === 'o') void chooseWorkdir();
   else if (mod) handled = false;
   else if (k === 'ArrowRight') grid.moveFocus(1, 0, e.shiftKey);
   else if (k === 'ArrowLeft') grid.moveFocus(-1, 0, e.shiftKey);
@@ -423,10 +462,10 @@ window.addEventListener('keydown', (e) => {
   else if (k === 'ArrowUp') grid.moveFocus(0, -1, e.shiftKey);
   else if (k === 'Home') grid.jumpTo('start', e.shiftKey);
   else if (k === 'End') grid.jumpTo('end', e.shiftKey);
-  else if (k === 'Enter' || k === ' ') openViewer(Math.max(0, store.indexOf(store.focus)));
+  else if (k === 'Enter') openViewer(Math.max(0, store.indexOf(store.focus)));
+  else if (k === ' ' || k === 's') void toggleStar(starTargets());
   else if (k === 'S' && e.shiftKey) setStarredOnly(!store.starredOnly);
   else if (k === '?') showHelp();
-  else if (k === 's') void toggleStar(starTargets());
   else if (k === 'Escape') {
     store.selection.clear();
     grid.refreshCells();
@@ -442,20 +481,16 @@ window.addEventListener('keydown', (e) => {
 async function boot(): Promise<void> {
   store.starredOnly = prefs.get('starredOnly', false);
   chkStarred.checked = store.starredOnly;
-  titleEl.innerHTML = '<span class="dim">正在扫描图库…</span>';
+  titleEl.innerHTML = '<span class="dim">正在扫描工作目录…</span>';
   let lib: Library;
   try {
     lib = await api.getLibrary();
   } catch (e) {
-    toast(`读取图库失败：${e}`, 'error', 6000);
+    toast(`读取工作目录失败：${e}`, 'error', 6000);
     return;
   }
   setLibrary(lib);
-  const last = prefs.get<View>('lastView', { kind: 'none' });
-  if (last.kind === 'starred') await openStarred();
-  else if (last.kind === 'folder' && lib.folders.some((f) => f.path === last.path)) await openFolder(last.path);
-  else if (lib.folders.length) await openFolder(lib.folders[0].path);
-  else showEmptyView();
+  await openInitialView(lib);
   gridEl.focus({ preventScroll: true });
 }
 

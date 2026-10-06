@@ -36,15 +36,56 @@ use stars::{StarLocation, StarStore};
 // 应用状态
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+const MAX_RECENT: usize = 12;
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 struct Settings {
+    /// 当前工作目录：侧栏列出它下面的所有相册（含照片的子文件夹）
     #[serde(default)]
+    workdir: Option<String>,
+    /// 最近用过的工作目录，最新的在前，用于快速切换
+    #[serde(default)]
+    recent: Vec<String>,
+    /// v0.1 的“多个根目录”设置；读入时迁移成 workdir + recent，不再写出
+    #[serde(default, skip_serializing)]
     roots: Vec<String>,
+}
+
+impl Settings {
+    fn parse(bytes: Option<&[u8]>) -> Self {
+        let mut s: Settings = bytes.and_then(|b| serde_json::from_slice(b).ok()).unwrap_or_default();
+        let legacy = std::mem::take(&mut s.roots);
+        if s.workdir.is_none() && !legacy.is_empty() {
+            for r in legacy.iter().rev() {
+                s.use_workdir(r.clone());
+            }
+        }
+        // 当前工作目录必须在“最近”列表里（手改过的或旧版写的设置可能没有）
+        if let Some(w) = s.workdir.clone() {
+            if s.recent.first() != Some(&w) {
+                s.use_workdir(w);
+            }
+        }
+        s
+    }
+
+    /// 允许访问的目录（图片协议、命令都只放行工作目录里的文件）
+    fn roots(&self) -> Vec<String> {
+        self.workdir.iter().cloned().collect()
+    }
+
+    fn use_workdir(&mut self, dir: String) {
+        self.recent.retain(|r| r != &dir);
+        self.recent.insert(0, dir.clone());
+        self.recent.truncate(MAX_RECENT);
+        self.workdir = Some(dir);
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Library {
-    roots: Vec<String>,
+    workdir: Option<String>,
+    recent: Vec<String>,
     folders: Vec<Folder>,
 }
 
@@ -65,19 +106,16 @@ pub struct AppState {
 impl AppState {
     fn new(config_dir: PathBuf, cache_dir: PathBuf, data_dir: PathBuf) -> Self {
         let settings_path = config_dir.join("settings.json");
-        let settings: Settings = fs::read(&settings_path)
-            .ok()
-            .and_then(|b| serde_json::from_slice(&b).ok())
-            .unwrap_or_default();
+        let settings = Settings::parse(fs::read(&settings_path).ok().as_deref());
         let images = ImageService::new(cache_dir.join("thumbs"));
-        images.set_roots(&settings.roots);
+        images.set_roots(&settings.roots());
         let library_cache_path = config_dir.join("library-cache.json");
         let cached: Vec<Folder> = fs::read(&library_cache_path)
             .ok()
             .and_then(|b| serde_json::from_slice::<Vec<Folder>>(&b).ok())
             .unwrap_or_default()
             .into_iter()
-            .filter(|f| settings.roots.contains(&f.root))
+            .filter(|f| settings.workdir.as_ref() == Some(&f.root))
             .collect();
         AppState {
             settings_path,
@@ -102,40 +140,28 @@ impl AppState {
     }
 
     fn library(&self) -> Library {
-        Library { roots: self.settings.lock().roots.clone(), folders: self.folders.read().clone() }
+        let s = self.settings.lock();
+        Library { workdir: s.workdir.clone(), recent: s.recent.clone(), folders: self.folders.read().clone() }
     }
 
-    fn rescan_all(&self) -> Library {
-        let roots = self.settings.lock().roots.clone();
-        let mut folders = Vec::new();
-        for r in &roots {
-            folders.extend(scan::scan_root(Path::new(r), &self.stars));
+    /// 重新扫描当前工作目录。扫描可能要几秒，期间用户可能已经切换了工作目录——
+    /// 那这次结果就作废，不能把旧目录的相册写回去。
+    fn rescan_all(&self) -> Option<Library> {
+        let workdir = self.settings.lock().workdir.clone();
+        let folders = workdir.as_deref().map(|w| scan::scan_root(Path::new(w), &self.stars)).unwrap_or_default();
+        if self.settings.lock().workdir != workdir {
+            return None;
         }
         *self.folders.write() = folders;
         self.scanned.store(true, Ordering::SeqCst);
         self.persist_folders();
-        self.library()
+        Some(self.library())
     }
 
     fn persist_folders(&self) {
         if let Ok(json) = serde_json::to_vec(&*self.folders.read()) {
             let _ = fs::write(&self.library_cache_path, json);
         }
-    }
-
-    fn folder_starred_count(&self, dir: &Path) -> usize {
-        let set = self.stars.load(dir);
-        if set.is_empty() {
-            return 0;
-        }
-        fs::read_dir(dir)
-            .map(|rd| {
-                rd.flatten()
-                    .filter(|e| formats::is_supported(&e.path()))
-                    .filter(|e| stars::is_starred(&set, &e.file_name().to_string_lossy()))
-                    .count()
-            })
-            .unwrap_or(0)
     }
 }
 
@@ -160,14 +186,16 @@ async fn get_library(app: AppHandle, state: AppStateRef<'_>) -> Result<Library, 
     }
     let has_cache = !st.folders.read().is_empty();
     if !has_cache {
-        return blocking(move || Ok(st.rescan_all())).await;
+        return blocking(move || Ok(st.rescan_all().unwrap_or_else(|| st.library()))).await;
     }
     if !st.scanning.swap(true, Ordering::SeqCst) {
         let st2 = st.clone();
         tauri::async_runtime::spawn_blocking(move || {
             let lib = st2.rescan_all();
             st2.scanning.store(false, Ordering::SeqCst);
-            let _ = app.emit("library-updated", lib);
+            if let Some(lib) = lib {
+                let _ = app.emit("library-updated", lib);
+            }
         });
     }
     Ok(st.library())
@@ -176,56 +204,47 @@ async fn get_library(app: AppHandle, state: AppStateRef<'_>) -> Result<Library, 
 #[tauri::command]
 async fn rescan(state: AppStateRef<'_>) -> Result<Library, String> {
     let st = state.inner().clone();
-    blocking(move || Ok(st.rescan_all())).await
+    blocking(move || Ok(st.rescan_all().unwrap_or_else(|| st.library()))).await
 }
 
+/// 选择（或切换到）一个工作目录，并扫描它下面的所有相册。
 #[tauri::command]
-async fn add_root(path: String, state: AppStateRef<'_>) -> Result<Library, String> {
+async fn set_workdir(path: String, state: AppStateRef<'_>) -> Result<Library, String> {
     let st = state.inner().clone();
     blocking(move || {
         let mut p = PathBuf::from(&path);
-        // 拖进来的是照片文件：添加它所在的文件夹
+        // 拖进来的是照片文件：用它所在的文件夹
         if p.is_file() {
             p = p.parent().map(Path::to_path_buf).ok_or("无效路径")?;
         }
         if !p.is_dir() {
-            return Err("不是文件夹".into());
+            return Err(format!("文件夹不存在：{}", p.display()));
         }
-        let path = p.to_string_lossy().trim_end_matches('/').to_string();
-        let path = if path.is_empty() { "/".to_string() } else { path };
+        let dir = p.to_string_lossy().trim_end_matches(['/', '\\']).to_string();
+        let dir = if dir.is_empty() { "/".to_string() } else { dir };
         let mut s = st.settings.lock().clone();
-        if s.roots.iter().any(|r| Path::new(&path).starts_with(r)) {
-            return Ok(st.library()); // 已经在某个根目录里了
-        }
-        // 新根目录包含了旧的根目录：旧的并进来
-        s.roots.retain(|r| !Path::new(r).starts_with(&path));
-        s.roots.push(path.clone());
+        s.use_workdir(dir);
         st.save_settings(&s)?;
-        st.images.set_roots(&s.roots);
-        let new_folders = scan::scan_root(Path::new(&path), &st.stars);
-        {
-            let mut folders = st.folders.write();
-            folders.retain(|f| s.roots.contains(&f.root));
-            folders.extend(new_folders);
-        }
+        st.images.set_roots(&s.roots());
         *st.settings.lock() = s;
-        st.persist_folders();
-        Ok(st.library())
+        st.folders.write().clear();
+        Ok(st.rescan_all().unwrap_or_else(|| st.library()))
     })
     .await
 }
 
+/// 从“最近的工作目录”里移除一项（不删除任何文件）。
 #[tauri::command]
-async fn remove_root(path: String, state: AppStateRef<'_>) -> Result<Library, String> {
+async fn forget_workdir(path: String, state: AppStateRef<'_>) -> Result<Library, String> {
     let st = state.inner().clone();
     blocking(move || {
         let mut s = st.settings.lock().clone();
-        s.roots.retain(|r| r != &path);
+        if s.workdir.as_deref() == Some(path.as_str()) {
+            return Err("不能移除当前的工作目录".into());
+        }
+        s.recent.retain(|r| r != &path);
         st.save_settings(&s)?;
-        st.images.set_roots(&s.roots);
-        st.folders.write().retain(|f| f.root != path);
         *st.settings.lock() = s;
-        st.persist_folders();
         Ok(st.library())
     })
     .await
@@ -279,7 +298,10 @@ async fn set_star(paths: Vec<String>, starred: bool, state: AppStateRef<'_>) -> 
                 return Err(format!("不在图库中：{}", p.display()));
             }
             if let (Some(dir), Some(name)) = (p.parent(), p.file_name()) {
-                by_dir.entry(dir.to_path_buf()).or_default().push(name.to_string_lossy().into_owned());
+                let names = by_dir.entry(dir.to_path_buf()).or_default();
+                names.push(name.to_string_lossy().into_owned());
+                // RAW+JPG：同名的 RAW（和 xmp）一起打星/取消，Picasa 等其它软件看到的也一致
+                names.extend(scan::companions_of(p));
             }
         }
         let mut res = SetStarResult { fallback: false, folders: BTreeMap::new() };
@@ -287,12 +309,13 @@ async fn set_star(paths: Vec<String>, starred: bool, state: AppStateRef<'_>) -> 
             if st.stars.set(&dir, &names, starred)? == StarLocation::Fallback {
                 res.fallback = true;
             }
-            let count = st.folder_starred_count(&dir);
+            let (count, starred_count) = scan::folder_counts(&dir, &st.stars);
             let key = dir.to_string_lossy().into_owned();
             if let Some(f) = st.folders.write().iter_mut().find(|f| f.path == key) {
-                f.starred = count;
+                f.count = count;
+                f.starred = starred_count;
             }
-            res.folders.insert(key, count);
+            res.folders.insert(key, starred_count);
         }
         st.persist_folders();
         Ok(res)
@@ -480,8 +503,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_library,
             rescan,
-            add_root,
-            remove_root,
+            set_workdir,
+            forget_workdir,
             list_folder,
             list_starred,
             set_star,
@@ -494,4 +517,48 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("启动失败");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn migrates_v01_roots_to_workdir_and_recent() {
+        let s = Settings::parse(Some(br#"{"roots": ["/a", "/b"]}"#));
+        assert_eq!(s.workdir.as_deref(), Some("/a"));
+        assert_eq!(s.recent, vec!["/a", "/b"]);
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(!json.contains("roots"), "旧字段不再写出：{json}");
+        assert_eq!(Settings::parse(Some(json.as_bytes())), s);
+    }
+
+    #[test]
+    fn recent_list_is_mru_without_duplicates() {
+        let mut s = Settings::parse(None);
+        assert!(s.workdir.is_none() && s.roots().is_empty());
+        for d in ["/a", "/b", "/a", "/c"] {
+            s.use_workdir(d.into());
+        }
+        assert_eq!(s.workdir.as_deref(), Some("/c"));
+        assert_eq!(s.recent, vec!["/c", "/a", "/b"]);
+        for i in 0..20 {
+            s.use_workdir(format!("/x{i}"));
+        }
+        assert_eq!(s.recent.len(), MAX_RECENT);
+        assert_eq!(s.roots(), vec!["/x19".to_string()]);
+    }
+
+    #[test]
+    fn current_workdir_is_always_first_in_recent() {
+        let s = Settings::parse(Some(br#"{"workdir": "/w", "recent": ["/a", "/w"]}"#));
+        assert_eq!(s.recent, vec!["/w", "/a"]);
+        let s = Settings::parse(Some(br#"{"workdir": "/w"}"#));
+        assert_eq!(s.recent, vec!["/w"]);
+    }
+
+    #[test]
+    fn garbage_settings_fall_back_to_default() {
+        assert_eq!(Settings::parse(Some(b"{not json")), Settings::default());
+    }
 }

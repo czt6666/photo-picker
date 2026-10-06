@@ -21,6 +21,10 @@ export interface MenuItem {
   label: string;
   action: () => void;
   disabled?: boolean;
+  /** 灰色小字（快捷键或路径） */
+  detail?: string;
+  /** 分组标题行（不可点） */
+  separator?: boolean;
 }
 
 let openMenu: HTMLElement | null = null;
@@ -35,8 +39,22 @@ export function contextMenu(x: number, y: number, items: MenuItem[]): void {
   const m = document.createElement('div');
   m.className = 'menu';
   for (const it of items) {
+    if (it.separator) {
+      const h = document.createElement('div');
+      h.className = 'menu-sep';
+      h.textContent = it.label;
+      m.appendChild(h);
+      continue;
+    }
     const b = document.createElement('button');
     b.textContent = it.label;
+    if (it.detail) {
+      const d = document.createElement('span');
+      d.className = 'menu-detail';
+      d.textContent = it.detail;
+      b.appendChild(d);
+      b.title = it.detail;
+    }
     b.disabled = !!it.disabled;
     b.addEventListener('click', () => {
       closeMenu();
