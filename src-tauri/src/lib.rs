@@ -13,10 +13,10 @@ mod pool;
 mod scan;
 mod stars;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -86,6 +86,8 @@ impl Settings {
 pub struct Library {
     workdir: Option<String>,
     recent: Vec<String>,
+    /// 最近列表里当前不存在的目录（移动硬盘没插、改名、删掉了），菜单里置灰
+    missing: Vec<String>,
     folders: Vec<Folder>,
 }
 
@@ -94,6 +96,10 @@ pub struct AppState {
     /// 上次扫描结果。启动时先用它秒开侧栏，再在后台重新扫描（大图库扫一遍可能要好几秒）
     library_cache_path: PathBuf,
     scanning: AtomicBool,
+    /// 工作目录“代数”：每次切换 +1。扫描开始时记下，结束时代数变了就说明用户已经换了目录，结果作废
+    workdir_gen: AtomicU64,
+    /// 扫描进行期间被打过星的文件夹：扫描结果里这些文件夹的星标数可能已过时，写回前要重算
+    star_touched: Mutex<HashSet<String>>,
     settings: Mutex<Settings>,
     folders: RwLock<Vec<Folder>>,
     scanned: AtomicBool,
@@ -121,6 +127,8 @@ impl AppState {
             settings_path,
             library_cache_path,
             scanning: AtomicBool::new(false),
+            workdir_gen: AtomicU64::new(0),
+            star_touched: Mutex::new(HashSet::new()),
             settings: Mutex::new(settings),
             folders: RwLock::new(cached),
             scanned: AtomicBool::new(false),
@@ -141,21 +149,46 @@ impl AppState {
 
     fn library(&self) -> Library {
         let s = self.settings.lock();
-        Library { workdir: s.workdir.clone(), recent: s.recent.clone(), folders: self.folders.read().clone() }
+        let missing = s.recent.iter().filter(|r| !Path::new(r).is_dir()).cloned().collect();
+        Library { workdir: s.workdir.clone(), recent: s.recent.clone(), missing, folders: self.folders.read().clone() }
     }
 
-    /// 重新扫描当前工作目录。扫描可能要几秒，期间用户可能已经切换了工作目录——
-    /// 那这次结果就作废，不能把旧目录的相册写回去。
-    fn rescan_all(&self) -> Option<Library> {
-        let workdir = self.settings.lock().workdir.clone();
-        let folders = workdir.as_deref().map(|w| scan::scan_root(Path::new(w), &self.stars)).unwrap_or_default();
-        if self.settings.lock().workdir != workdir {
+    /// 扫描结束时把结果写回：只有在扫描期间工作目录没被切换过才写（在设置锁里判断并写入，原子完成）。
+    /// 扫描期间被打过星的文件夹，星标数重新算一遍，免得旧结果把新星标数盖掉。
+    fn commit_scan(&self, gen: u64, workdir: Option<String>, mut folders: Vec<Folder>, settings: Option<Settings>) -> Option<Library> {
+        let mut s = self.settings.lock();
+        if self.workdir_gen.load(Ordering::SeqCst) != gen {
             return None;
         }
+        if let Some(new) = settings {
+            // 设置也在这里（判断过没被抢先之后）才落盘，免得一个作废的切换把旧目录写进设置文件
+            if let Err(e) = self.save_settings(&new) {
+                eprintln!("[settings] 保存失败：{e}");
+            }
+            *s = new;
+        }
+        if s.workdir != workdir {
+            return None;
+        }
+        let touched = std::mem::take(&mut *self.star_touched.lock());
+        for f in folders.iter_mut().filter(|f| touched.contains(&f.path)) {
+            (f.count, f.starred) = scan::folder_counts(Path::new(&f.path), &self.stars);
+        }
+        self.images.set_roots(&s.roots());
         *self.folders.write() = folders;
+        drop(s);
         self.scanned.store(true, Ordering::SeqCst);
         self.persist_folders();
         Some(self.library())
+    }
+
+    /// 重新扫描当前工作目录。扫描可能要几秒，期间用户可能已经切换了工作目录——那这次结果就作废。
+    fn rescan_all(&self) -> Option<Library> {
+        let gen = self.workdir_gen.load(Ordering::SeqCst);
+        let workdir = self.settings.lock().workdir.clone();
+        self.star_touched.lock().clear();
+        let folders = workdir.as_deref().map(|w| scan::scan_root(Path::new(w), &self.stars)).unwrap_or_default();
+        self.commit_scan(gen, workdir, folders, None)
     }
 
     fn persist_folders(&self) {
@@ -208,6 +241,9 @@ async fn rescan(state: AppStateRef<'_>) -> Result<Library, String> {
 }
 
 /// 选择（或切换到）一个工作目录，并扫描它下面的所有相册。
+///
+/// 先扫描、后切换：扫描可能要好几秒（移动硬盘、NAS），这期间旧工作目录照常可用；
+/// 扫完再一次性切换设置、访问权限和相册列表。期间用户又选了别的目录，这次的结果就作废。
 #[tauri::command]
 async fn set_workdir(path: String, state: AppStateRef<'_>) -> Result<Library, String> {
     let st = state.inner().clone();
@@ -221,17 +257,21 @@ async fn set_workdir(path: String, state: AppStateRef<'_>) -> Result<Library, St
             return Err(format!("文件夹不存在：{}", p.display()));
         }
         let dir = p.to_string_lossy().trim_end_matches(['/', '\\']).to_string();
-        let dir = if dir.is_empty() { "/".to_string() } else { dir };
+        if dir.is_empty() {
+            return Err("请选择具体的照片文件夹，而不是整个磁盘".into());
+        }
+        let gen = st.workdir_gen.fetch_add(1, Ordering::SeqCst) + 1;
+        st.star_touched.lock().clear();
+        let folders = scan::scan_root(Path::new(&dir), &st.stars);
         let mut s = st.settings.lock().clone();
-        s.use_workdir(dir);
-        st.save_settings(&s)?;
-        st.images.set_roots(&s.roots());
-        *st.settings.lock() = s;
-        st.folders.write().clear();
-        Ok(st.rescan_all().unwrap_or_else(|| st.library()))
+        s.use_workdir(dir.clone());
+        st.commit_scan(gen, Some(dir), folders, Some(s)).ok_or_else(|| SUPERSEDED.to_string())
     })
     .await
 }
+
+/// 扫描期间用户又切换了工作目录：这次结果作废。前端认得这个字符串，静默忽略。
+const SUPERSEDED: &str = "superseded";
 
 /// 从“最近的工作目录”里移除一项（不删除任何文件）。
 #[tauri::command]
@@ -298,14 +338,23 @@ async fn set_star(paths: Vec<String>, starred: bool, state: AppStateRef<'_>) -> 
                 return Err(format!("不在图库中：{}", p.display()));
             }
             if let (Some(dir), Some(name)) = (p.parent(), p.file_name()) {
-                let names = by_dir.entry(dir.to_path_buf()).or_default();
-                names.push(name.to_string_lossy().into_owned());
-                // RAW+JPG：同名的 RAW（和 xmp）一起打星/取消，Picasa 等其它软件看到的也一致
-                names.extend(scan::companions_of(p));
+                by_dir.entry(dir.to_path_buf()).or_default().push(name.to_string_lossy().into_owned());
             }
         }
         let mut res = SetStarResult { fallback: false, folders: BTreeMap::new() };
-        for (dir, names) in by_dir {
+        for (dir, primaries) in by_dir {
+            // RAW+JPG：同名的 RAW 一起打星/取消（每个文件夹只读一次目录）。
+            // xmp 不是图片，加星时不写它；取消时连它一起清（兼容早先写过的记录）
+            let map = scan::companion_map(&dir);
+            let mut names = primaries.clone();
+            for n in &primaries {
+                for c in map.get(n).into_iter().flatten() {
+                    if !starred || !c.to_ascii_lowercase().ends_with(".xmp") {
+                        names.push(c.clone());
+                    }
+                }
+            }
+            st.star_touched.lock().insert(dir.to_string_lossy().into_owned());
             if st.stars.set(&dir, &names, starred)? == StarLocation::Fallback {
                 res.fallback = true;
             }
@@ -555,6 +604,78 @@ mod tests {
         assert_eq!(s.recent, vec!["/w", "/a"]);
         let s = Settings::parse(Some(br#"{"workdir": "/w"}"#));
         assert_eq!(s.recent, vec!["/w"]);
+    }
+
+    fn state() -> (tempfile::TempDir, Arc<AppState>) {
+        let t = tempfile::tempdir().unwrap();
+        let st = Arc::new(AppState::new(t.path().join("cfg"), t.path().join("cache"), t.path().join("data")));
+        (t, st)
+    }
+
+    fn photo_dir(root: &Path, rel: &str, files: &[&str]) {
+        let d = root.join(rel);
+        fs::create_dir_all(&d).unwrap();
+        for f in files {
+            fs::write(d.join(f), b"x").unwrap();
+        }
+    }
+
+    #[test]
+    fn superseded_switch_is_discarded_and_not_persisted() {
+        let (t, st) = state();
+        let a = t.path().join("A");
+        let b = t.path().join("B");
+        photo_dir(&a, "x", &["1.jpg"]);
+        photo_dir(&b, "y", &["2.jpg"]);
+        // 模拟：切到 A 的扫描还没结束，用户又切到了 B（代数 +1）
+        let gen_a = st.workdir_gen.fetch_add(1, Ordering::SeqCst) + 1;
+        let folders_a = scan::scan_root(&a, &st.stars);
+        let gen_b = st.workdir_gen.fetch_add(1, Ordering::SeqCst) + 1;
+        let mut sb = Settings::default();
+        sb.use_workdir(b.to_string_lossy().into_owned());
+        let lib = st.commit_scan(gen_b, sb.workdir.clone(), scan::scan_root(&b, &st.stars), Some(sb)).unwrap();
+        assert_eq!(lib.folders[0].name, "y");
+        // A 的结果后到：作废，不覆盖 B，也不写进设置文件
+        let mut sa = Settings::default();
+        sa.use_workdir(a.to_string_lossy().into_owned());
+        assert!(st.commit_scan(gen_a, sa.workdir.clone(), folders_a, Some(sa)).is_none());
+        assert_eq!(st.library().workdir.as_deref(), Some(b.to_string_lossy().as_ref()));
+        let saved = Settings::parse(fs::read(&st.settings_path).ok().as_deref());
+        assert_eq!(saved.workdir.as_deref(), Some(b.to_string_lossy().as_ref()));
+        // 访问权限也只放行 B
+        assert!(st.images.allowed(&b.join("y/2.jpg")) && !st.images.allowed(&a.join("x/1.jpg")));
+    }
+
+    #[test]
+    fn star_counts_changed_during_scan_survive_the_commit() {
+        let (t, st) = state();
+        let w = t.path().join("W");
+        photo_dir(&w, "album", &["1.jpg", "2.jpg"]);
+        let mut s = Settings::default();
+        s.use_workdir(w.to_string_lossy().into_owned());
+        let gen = st.workdir_gen.load(Ordering::SeqCst);
+        st.commit_scan(gen, s.workdir.clone(), scan::scan_root(&w, &st.stars), Some(s.clone())).unwrap();
+        // 后台重扫开始（读到 0 星）……
+        let stale = scan::scan_root(&w, &st.stars);
+        // ……扫描期间用户打了星
+        let album = w.join("album");
+        st.stars.set(&album, &["1.jpg".into()], true).unwrap();
+        st.star_touched.lock().insert(album.to_string_lossy().into_owned());
+        let lib = st.commit_scan(gen, s.workdir.clone(), stale, None).unwrap();
+        assert_eq!(lib.folders[0].starred, 1, "扫描结果里过时的 0 星不能盖掉新打的星");
+    }
+
+    #[test]
+    fn missing_recent_dirs_are_reported() {
+        let (t, st) = state();
+        let gone = t.path().join("unplugged").to_string_lossy().into_owned();
+        let here = t.path().to_string_lossy().into_owned();
+        {
+            let mut s = st.settings.lock();
+            s.use_workdir(gone.clone());
+            s.use_workdir(here);
+        }
+        assert_eq!(st.library().missing, vec![gone]);
     }
 
     #[test]

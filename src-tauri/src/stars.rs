@@ -89,11 +89,7 @@ fn edit_ini(path: &Path, names: &[String], starred: bool, header: Option<&str>) 
         }
         Err(e) => return Err(e),
     };
-    let mut changed = false;
-    for n in names {
-        changed |= doc.set_star(n, starred);
-    }
-    if !changed {
+    if !doc.set_star_many(names, starred) {
         return Ok(());
     }
     let tmp = path.with_extension(format!("ini.tmp{}", std::process::id()));

@@ -182,6 +182,18 @@ def run(d, env, export_dir):
     side = wait(lambda: d.find_element(By.CSS_SELECTOR, ".sb-starred .count").text == "2")
     check("侧栏星标总数随之更新", side)
 
+    # 点过状态栏的“星标”按钮后焦点留在按钮上，再按空格：只能切换一次（不能“按钮被空格点一次 + 快捷键一次”抵消掉）
+    d.find_element(By.CSS_SELECTOR, '.cell[data-i="4"]').click()
+    d.find_element(By.ID, "btn-star").click()
+    ok1 = wait(lambda: "[DSC_5.jpg]" in ini.read_text(), timeout=5)
+    ActionChains(d).send_keys(Keys.SPACE).perform()
+    time.sleep(0.8)
+    check("焦点在按钮上时按空格只切换一次", ok1 and "[DSC_5.jpg]" not in ini.read_text(), ini.read_text().replace("\r\n", " | "))
+    # 按住空格的自动连发（repeat=true）要忽略
+    js(d, "window.dispatchEvent(new KeyboardEvent('keydown', {key: ' ', repeat: true, bubbles: true}))")
+    time.sleep(0.8)
+    check("按住空格的自动连发不会反复切换星标", "[DSC_5.jpg]" not in ini.read_text())
+
     # ---------- 看图器：大图翻页 ----------
     open_folder(d, "大图")
     wait(lambda: "40 张" in d.find_element(By.ID, "status-count").text)
@@ -333,6 +345,26 @@ def run(d, env, export_dir):
     js(d, "[...document.querySelectorAll('.menu button')].find(b => b.innerText.startsWith('photos')).click()")
     ok = wait(lambda: js(d, "return document.querySelectorAll('.sb-item[data-path]').length") == 3, timeout=30)
     check("从“最近”切回原工作目录，3 个相册都回来了", ok)
+
+    # 最近列表里的目录被删除 / 移动硬盘拔掉：菜单里置灰，可一键清理
+    gone = WORK / "temp-workdir"
+    shutil.rmtree(gone, ignore_errors=True)
+    (gone / "album").mkdir(parents=True)
+    shutil.copy(PHOTOS / "杂项" / "screenshot.png", gone / "album" / "a.png")
+    invoke(d, "set_workdir", {"path": str(gone)})
+    invoke(d, "set_workdir", {"path": str(PHOTOS)})
+    shutil.rmtree(gone)
+    d.refresh()
+    wait(lambda: js(d, "return document.querySelectorAll('.sb-item[data-path]').length") == 3, timeout=30)
+    d.find_element(By.ID, "btn-workdir").click()
+    items = wait(lambda: js(d, "return [...document.querySelectorAll('.menu button')].map(b => [b.innerText.replace(/\\s+/g, ' '), b.disabled])"))
+    greyed = [t for t, dis in items or [] if "未连接" in t and dis]
+    check("不存在的最近目录显示“未连接”且不可点", len(greyed) == 1 and "temp-workdir" in greyed[0], str(items))
+    js(d, "[...document.querySelectorAll('.menu button')].find(b => b.innerText.startsWith('从列表中移除')).click()")
+    time.sleep(1)
+    d.find_element(By.ID, "btn-workdir").click()
+    items = wait(lambda: js(d, "return [...document.querySelectorAll('.menu button')].map(b => b.innerText)"))
+    check("一键清理后不再列出", items and not any("temp-workdir" in t for t in items), str(items))
 
 
 if __name__ == "__main__":

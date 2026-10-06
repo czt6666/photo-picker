@@ -8,7 +8,7 @@ type Topic = 'library' | 'photos' | 'selection' | 'stars' | 'view';
 type Listener = () => void;
 
 class Store {
-  library: Library = { workdir: null, recent: [], folders: [] };
+  library: Library = { workdir: null, recent: [], missing: [], folders: [] };
   view: View = { kind: 'none' };
   /** 当前视图（文件夹 / 星标相册）的全部照片 */
   all: Photo[] = [];

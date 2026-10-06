@@ -52,9 +52,10 @@ pub fn split_group_stem(name: &str) -> (&str, &str) {
     if ext.is_empty() {
         return (name, "");
     }
+    // 侧车文件可能带着原文件的扩展名：IMG_1.CR3.xmp（Lightroom/C1）、IMG_1.JPG.xmp（darktable）
     let stem = if ext == "xmp" {
         match split_ext(stem) {
-            (inner, e) if crate::formats::is_raw(&e) => inner,
+            (inner, e) if !e.is_empty() && (crate::formats::is_raw(&e) || is_supported_ext(&e)) => inner,
             _ => stem,
         }
     } else {
@@ -89,9 +90,11 @@ pub fn group_names<I: IntoIterator<Item = String>>(names: I) -> Vec<Group> {
     for (_, mut members) in by_key {
         members.sort_by(|a, b| natural_cmp(a, b));
         let ext_of = |n: &str| split_ext(n).1;
-        // 主文件候选：JPG 优先；否则是能显示的非伴侣格式；再否则是能解码的 RAW
+        // 主文件候选：JPG 优先；否则是能显示的非伴侣格式（HEIC、TIFF…）；最后才是能解码的 RAW
         let jpg = members.iter().position(|n| is_jpeg(&ext_of(n)));
-        let primary_idx = jpg.or_else(|| members.iter().position(|n| is_supported_ext(&ext_of(n)) && ext_of(n) != "xmp"));
+        let primary_idx = jpg
+            .or_else(|| members.iter().position(|n| is_supported_ext(&ext_of(n)) && !is_companion(&ext_of(n))))
+            .or_else(|| members.iter().position(|n| is_supported_ext(&ext_of(n))));
         let Some(pi) = primary_idx else { continue };
         let primary = members[pi].clone();
         let mut companions = Vec::new();
@@ -119,28 +122,32 @@ impl Group {
     }
 }
 
-/// 某个主文件的同名伴侣文件（文件名）。打星、导出时用。
+/// 文件夹里的普通文件名（不含符号链接、子文件夹）。
+/// 符号链接一律不算：否则一个名叫 IMG_1.CR3、指向别处的链接会被当成 RAW 跟着导出。
+fn regular_file_names(dir: &Path) -> Vec<String> {
+    let Ok(rd) = fs::read_dir(dir) else { return Vec::new() };
+    rd.flatten()
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect()
+}
+
+/// 一个文件夹里“主文件名 → 伴侣文件名”的表。只读一次目录：批量打星、导出几千张时，
+/// 每张都去重新读一遍目录会变成 O(张数 × 文件夹大小)，几千张要几十秒。
+pub fn companion_map(dir: &Path) -> HashMap<String, Vec<String>> {
+    group_names(regular_file_names(dir)).into_iter().map(|g| (g.primary, g.companions)).collect()
+}
+
+/// 某个主文件的同名伴侣文件（文件名）。测试用；正式代码一律批量用 [`companion_map`]。
+#[cfg(test)]
 pub fn companions_of(path: &Path) -> Vec<String> {
     let (Some(dir), Some(name)) = (path.parent(), path.file_name()) else { return Vec::new() };
-    let name = name.to_string_lossy();
-    let key = group_key(&name);
-    let Ok(rd) = fs::read_dir(dir) else { return Vec::new() };
-    let same_stem: Vec<String> = rd
-        .flatten()
-        .map(|e| e.file_name().to_string_lossy().into_owned())
-        .filter(|n| group_key(n) == key)
-        .collect();
-    group_names(same_stem)
-        .into_iter()
-        .find(|g| g.primary == name)
-        .map(|g| g.companions)
-        .unwrap_or_default()
+    companion_map(dir).remove(name.to_string_lossy().as_ref()).unwrap_or_default()
 }
 
 /// 文件夹里的照片数和加星照片数（按组计，RAW+JPG 算一张）。
 pub fn folder_counts(dir: &Path, stars: &StarStore) -> (usize, usize) {
-    let Ok(rd) = fs::read_dir(dir) else { return (0, 0) };
-    let groups = group_names(rd.flatten().filter(|e| e.file_type().is_ok_and(|t| t.is_file())).map(|e| e.file_name().to_string_lossy().into_owned()));
+    let groups = group_names(regular_file_names(dir));
     let set = stars.load(dir);
     let starred = if set.is_empty() { 0 } else { groups.iter().filter(|g| g.is_starred(&set)).count() };
     (groups.len(), starred)
@@ -181,7 +188,8 @@ pub fn mtime_ms(meta: &fs::Metadata) -> i64 {
 pub fn scan_root(root: &Path, stars: &StarStore) -> Vec<Folder> {
     let home = dirs_home();
     let mut found: HashMap<PathBuf, Vec<String>> = HashMap::new();
-    let walker = WalkDir::new(root).follow_links(false).max_depth(32).into_iter().filter_entry(|e| {
+    // same_file_system：不跨到别的磁盘/挂载点（例如 macOS 的 /System/Volumes/Data、/Volumes 下的移动硬盘）
+    let walker = WalkDir::new(root).follow_links(false).same_file_system(true).max_depth(32).into_iter().filter_entry(|e| {
         if e.depth() == 0 || !e.file_type().is_dir() {
             return true;
         }
@@ -349,6 +357,34 @@ mod tests {
         assert_eq!(split_group_stem("a.b.jpg"), ("a.b", ".jpg"));
         assert_eq!(split_group_stem("noext"), ("noext", ""));
         assert_eq!(split_group_stem(".hidden"), (".hidden", ""));
+    }
+
+    #[test]
+    fn displayable_format_beats_raw_when_there_is_no_jpg() {
+        // TIFF 各平台都能显示，应当是主文件，NEF 跟着它（macOS 上以前会让 NEF 当主文件、两张分开显示）
+        assert_eq!(group_names(names(&["a.NEF", "a.tif"])), vec![g("a.tif", &["a.NEF"])]);
+        if cfg!(target_os = "macos") {
+            assert_eq!(group_names(names(&["DSC_1.ARW", "DSC_1.HEIF"])), vec![g("DSC_1.HEIF", &["DSC_1.ARW"])]);
+        }
+    }
+
+    #[test]
+    fn darktable_style_jpg_sidecar_joins_the_group() {
+        let got = group_names(names(&["IMG_1.JPG", "IMG_1.JPG.xmp", "IMG_1.CR3"]));
+        assert_eq!(got, vec![g("IMG_1.JPG", &["IMG_1.CR3", "IMG_1.JPG.xmp"])]);
+        assert_eq!(split_group_stem("IMG_1.JPG.xmp"), ("IMG_1", ".JPG.xmp"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinks_are_never_companions() {
+        let root = tempfile::tempdir().unwrap();
+        let d = root.path();
+        touch(&d.join("IMG_1.JPG"));
+        touch(&d.join("secret.txt"));
+        std::os::unix::fs::symlink(d.join("secret.txt"), d.join("IMG_1.CR3")).unwrap();
+        assert!(companions_of(&d.join("IMG_1.JPG")).is_empty());
+        assert_eq!(companion_map(d).get("IMG_1.JPG"), Some(&Vec::new()));
     }
 
     #[test]

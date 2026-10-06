@@ -73,16 +73,16 @@ function setLibrary(lib: Library): void {
 
 let viewSeq = 0;
 
-async function showView(view: View, load: () => Promise<Photo[]>): Promise<void> {
+async function showView(view: View, load: () => Promise<Photo[]>): Promise<boolean> {
   const seq = ++viewSeq;
   let photos: Photo[];
   try {
     photos = await load();
   } catch (e) {
-    toast(`读取失败：${e}`, 'error');
-    return;
+    if (seq === viewSeq) toast(`读取失败：${e}`, 'error');
+    return false;
   }
-  if (seq !== viewSeq) return; // 用户已经点了别的文件夹
+  if (seq !== viewSeq) return true; // 用户已经点了别的文件夹
   store.setPhotos(view, photos);
   if (store.library.workdir) prefs.set(`lastView:${store.library.workdir}`, view);
   sidebar.render();
@@ -90,6 +90,7 @@ async function showView(view: View, load: () => Promise<Photo[]>): Promise<void>
   renderChrome();
   // 后台把整个文件夹的缩略图生成好，往下滚时就不用等
   void api.prefetchThumbs(photos.map((p) => p.path)).catch(() => {});
+  return true;
 }
 
 const openFolder = (path: string) => showView({ kind: 'folder', path }, () => api.listFolder(path));
@@ -113,7 +114,7 @@ function renderChrome(): void {
     const f = store.folder(v.path);
     titleEl.innerHTML = `<b>${esc(f?.name ?? v.path.split(/[\\/]/).pop() ?? '')}</b> <span class="dim">${esc(v.path)}</span>`;
   } else if (v.kind === 'starred') {
-    titleEl.innerHTML = '<b><span class="star">★</span> 已加星标的照片</b> <span class="dim">所有文件夹</span>';
+    titleEl.innerHTML = '<b><span class="star">★</span> 已加星标的照片</b> <span class="dim">工作目录中的所有相册</span>';
   } else {
     titleEl.textContent = '';
   }
@@ -178,6 +179,9 @@ function starTargets(): Photo[] {
 }
 
 /** 像 Picasa 一样：选中的照片里只要有没加星的，就全部加星；否则全部取消。 */
+/** 星标请求排队：一个写完再发下一个，保证“先加星、马上取消”最后落盘的是“取消” */
+let starChain: Promise<unknown> = Promise.resolve();
+
 async function toggleStar(photos: Photo[]): Promise<void> {
   if (!photos.length) return;
   const target = photos.some((p) => !p.starred);
@@ -187,11 +191,11 @@ async function toggleStar(photos: Photo[]): Promise<void> {
   grid.refreshCells();
   viewer.refreshStar();
   updateStatus();
+  const paths = changed.map((p) => p.path);
+  const job = starChain.then(() => api.setStar(paths, target));
+  starChain = job.catch(() => {});
   try {
-    const r = await api.setStar(
-      changed.map((p) => p.path),
-      target,
-    );
+    const r = await job;
     for (const [dir, n] of Object.entries(r.folders)) {
       const f = store.folder(dir);
       if (f) f.starred = n;
@@ -206,7 +210,10 @@ async function toggleStar(photos: Photo[]): Promise<void> {
       updateStatus();
     }
   } catch (e) {
-    changed.forEach((p) => (p.starred = !target));
+    // 只回滚“还停留在这次设置的状态”的照片（之后又被改过的以后来的为准）
+    changed.forEach((p) => {
+      if (p.starred === target) p.starred = !target;
+    });
     grid.refreshCells();
     viewer.refreshStar();
     updateStatus();
@@ -229,16 +236,31 @@ async function chooseWorkdir(): Promise<void> {
   if (typeof picked === 'string') await switchWorkdir(picked);
 }
 
-/** 切换工作目录：扫描它下面所有含照片的子文件夹（相册），打开上次看的或第一个相册 */
+let switchSeq = 0;
+
+/** 切换工作目录：扫描它下面所有含照片的子文件夹（相册），打开上次看的或第一个相册。
+ *  扫描期间旧目录照常可用（后端扫完才切换）；期间又选了别的目录，以最后一次为准。 */
 async function switchWorkdir(path: string): Promise<void> {
+  if (isExportOpen()) {
+    toast('请先关闭导出对话框', 'warn');
+    return;
+  }
+  const seq = ++switchSeq;
   toast(`正在扫描 ${baseName(path)} …`);
+  thumbsEl.textContent = `正在扫描 ${baseName(path)} …`;
   let lib: Library;
   try {
     lib = await api.setWorkdir(path);
   } catch (e) {
-    toast(`无法打开：${e}`, 'error', 4000);
+    if (seq !== switchSeq || String(e).includes('superseded')) return;
+    thumbsEl.textContent = '';
+    const missing = String(e).includes('不存在');
+    toast(missing ? `找不到 ${path}（移动硬盘没连接？）。可在工作目录菜单里把它从“最近”中移除。` : `无法打开：${e}`, 'error', 5000);
     return;
   }
+  if (seq !== switchSeq) return;
+  thumbsEl.textContent = '';
+  if (viewer.opened) viewer.close(); // 看图器里还是旧目录的照片
   setLibrary(lib);
   await openInitialView(lib);
   if (lib.folders.length) {
@@ -247,13 +269,15 @@ async function switchWorkdir(path: string): Promise<void> {
   }
 }
 
-/** 打开该工作目录上次看的相册；没有就打开第一个 */
+/** 打开该工作目录上次看的相册；打不开（被删、改名、磁盘没插）就退到第一个相册，再不行显示空状态 */
 async function openInitialView(lib: Library): Promise<void> {
   const last = lib.workdir ? prefs.get<View>(`lastView:${lib.workdir}`, { kind: 'none' }) : { kind: 'none' as const };
-  if (last.kind === 'starred') await openStarred();
-  else if (last.kind === 'folder' && lib.folders.some((f) => f.path === last.path)) await openFolder(last.path);
-  else if (lib.folders.length) await openFolder(lib.folders[0].path);
-  else showEmptyView();
+  if (last.kind === 'starred' && (await openStarred())) return;
+  if (last.kind === 'folder' && lib.folders.some((f) => f.path === last.path) && (await openFolder(last.path))) return;
+  for (const f of lib.folders.slice(0, 3)) {
+    if (f.path !== (last.kind === 'folder' ? last.path : '') && (await openFolder(f.path))) return;
+  }
+  showEmptyView();
 }
 
 /** 太长的路径只保留后半段：…/2024/旅行 */
@@ -262,8 +286,14 @@ function shortPath(p: string, max = 46): string {
 }
 
 function showWorkdirMenu(x: number, y: number): void {
-  const { workdir, recent } = store.library;
+  const { workdir, recent, missing } = store.library;
   const others = recent.filter((r) => r !== workdir);
+  const gone = new Set(missing);
+  const forgetMissing = async () => {
+    let lib: Library | null = null;
+    for (const m of missing.filter((m) => m !== workdir)) lib = await api.forgetWorkdir(m).catch(() => lib);
+    if (lib) setLibrary(lib);
+  };
   contextMenu(x, y, [
     { label: '选择工作目录…', detail: '⌘O', action: () => void chooseWorkdir() },
     ...(workdir
@@ -273,7 +303,13 @@ function showWorkdirMenu(x: number, y: number): void {
         ]
       : []),
     ...(others.length ? [{ separator: true, label: '最近的工作目录', action: () => {} }] : []),
-    ...others.map((r) => ({ label: baseName(r), detail: shortPath(r), action: () => void switchWorkdir(r) })),
+    ...others.map((r) => ({
+      label: gone.has(r) ? `${baseName(r)}（未连接）` : baseName(r),
+      detail: shortPath(r),
+      disabled: gone.has(r),
+      action: () => void switchWorkdir(r),
+    })),
+    ...(others.some((r) => gone.has(r)) ? [{ label: '从列表中移除未连接的目录', action: () => void forgetMissing() }] : []),
   ]);
 }
 
@@ -407,7 +443,15 @@ document.addEventListener('contextmenu', (e) => {
 });
 
 // 启动时先显示上次的图库缓存，后台扫描完成后在这里更新（新增/删除的文件夹、照片数）
-void listen<Library>('library-updated', (e) => setLibrary(e.payload));
+void listen<Library>('library-updated', (e) => {
+  setLibrary(e.payload);
+  const v = store.view;
+  if ((v.kind === 'folder' && !store.folder(v.path)) || (v.kind === 'none' && e.payload.folders.length)) {
+    if (!viewer.opened) void openInitialView(e.payload);
+  } else {
+    renderChrome();
+  }
+});
 
 void listen<Progress>('thumb-progress', (e) => {
   const { done, total } = e.payload;
@@ -430,7 +474,8 @@ void getCurrentWebview()
 window.addEventListener('keydown', (e) => {
   const mod = e.metaKey || e.ctrlKey;
   const k = e.key;
-  if (k === 'Escape') closeMenu();
+  // 菜单开着时按任何键都先关掉它（菜单里的“加星标/取消星标”文字是打开时算好的，按键改了状态就过时了）
+  closeMenu();
   if (isExportOpen()) {
     if (k === 'Escape') {
       closeExportDialog();
@@ -443,6 +488,12 @@ window.addEventListener('keydown', (e) => {
   const tag = (e.target as HTMLElement).tagName;
   if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') {
     if (k === 'Escape' || k === 'Enter') (e.target as HTMLElement).blur();
+    return;
+  }
+  // 按住空格/S 不放时系统会自动连发按键：星标只认第一下，否则会一闪一闪地反复切换
+  const isStarKey = k === ' ' || k === 's' || k === 'S' || (mod && k === '8');
+  if (isStarKey && e.repeat) {
+    e.preventDefault();
     return;
   }
   if (viewer.opened) {

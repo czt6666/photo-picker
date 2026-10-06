@@ -64,7 +64,7 @@ export function openExportDialog(): void {
         <div class="label">导出哪些</div>
         ${radio('view-starred', '当前文件夹中的星标照片', viewStarred.length, inStarredView)}
         ${radio('selected', '选中的照片', selected.length)}
-        ${radio('all-starred', '全部星标照片（所有文件夹）', allStarred)}
+        ${radio('all-starred', '全部星标照片（工作目录中的所有相册）', allStarred)}
       </div>
       <div class="field">
         <div class="label">导出到</div>
@@ -186,7 +186,7 @@ export function openExportDialog(): void {
       });
       fill.style.width = '100%';
       const failed = r.failed.length
-        ? `，${r.failed.length} 张失败：${r.failed.slice(0, 3).map((f) => `${f.path.split(/[\\/]/).pop()}（${f.error}）`).join('；')}`
+        ? `，${r.failed.length} 个文件失败：${r.failed.slice(0, 3).map((f) => `${f.path.split(/[\\/]/).pop()}（${f.error}）`).join('；')}`
         : '';
       const extra = r.files > r.exported ? `（共 ${r.files} 个文件，含同名 RAW）` : '';
       ptext.innerHTML = `${r.cancelled ? '已停止。' : '完成！'}导出了 <b>${r.exported}</b> 张${extra}${esc(failed)}<br><span class="path">${esc(r.dest)}</span>`;

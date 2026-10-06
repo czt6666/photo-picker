@@ -27,6 +27,8 @@ export interface Library {
   workdir: string | null;
   /** 最近用过的工作目录，最新在前 */
   recent: string[];
+  /** recent 里当前不存在的目录（移动硬盘没插、被删或改名） */
+  missing: string[];
   /** 工作目录下所有含照片的文件夹（相册） */
   folders: Folder[];
 }

@@ -10,7 +10,7 @@
 //! 重名时自动改名为 `名字 (1).jpg`；成组的文件一起改名（`IMG_1 (1).JPG` + `IMG_1 (1).CR3`），
 //! 保证导出后 RAW 和 JPG 依然同名配对。多张缩图并行处理。
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -19,9 +19,10 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
 use crate::decode::render_jpeg;
-use crate::formats::{ext_of, is_jpeg};
+use crate::formats::{ext_of, is_jpeg, is_raw};
 use crate::meta::{read_jpeg_head, transplant_metadata};
-use crate::scan::{companions_of, split_group_stem};
+use crate::picasa_ini::norm_name;
+use crate::scan::{companion_map, split_group_stem};
 
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -93,15 +94,27 @@ fn sanitize(name: &str) -> String {
         .to_string()
 }
 
-/// 为一组文件找一套不冲突的目标路径。`tails` 是每个文件名去掉组名后的部分（如 `.JPG`、`.CR3`、`.CR3.xmp`）。
+/// 目标路径的“占用键”。macOS 默认的 APFS 不区分大小写：`IMG_1.jpg` 和 `IMG_1.JPG` 是同一个文件，
+/// 所以分配名字时按规范化后的小写比较，否则两张图会互相覆盖。
+fn reserve_key(p: &Path) -> String {
+    norm_name(&p.to_string_lossy())
+}
+
+/// 目标位置已经有东西（包括失效的符号链接——`exists()` 会把它当成不存在，复制时却会顺着链接写到别处）。
+fn occupied(p: &Path) -> bool {
+    fs::symlink_metadata(p).is_ok()
+}
+
+/// 为一组文件找一套不冲突的目标路径。`tails` 是每个文件名去掉组名后的部分（如 `.JPG`、`.CR3`、`.CR3.xmp`），
+/// 调用方保证组内的后缀互不相同（忽略大小写）。
 /// 不冲突时用原名；有任何一个冲突，整组一起改成 `组名 (n)` + 各自的后缀：a.jpg → a (1).jpg → a (2).jpg …
-fn unique_targets(dir: &Path, stem: &str, tails: &[String], reserved: &mut HashSet<PathBuf>) -> Vec<PathBuf> {
+fn unique_targets(dir: &Path, stem: &str, tails: &[String], reserved: &mut HashSet<String>) -> Vec<PathBuf> {
     let mut n = 0;
     loop {
         let base = if n == 0 { stem.to_string() } else { format!("{stem} ({n})") };
         let paths: Vec<PathBuf> = tails.iter().map(|t| dir.join(format!("{base}{t}"))).collect();
-        if paths.iter().all(|p| !p.exists() && !reserved.contains(p)) {
-            reserved.extend(paths.iter().cloned());
+        if paths.iter().all(|p| !occupied(p) && !reserved.contains(&reserve_key(p))) {
+            reserved.extend(paths.iter().map(|p| reserve_key(p)));
             return paths;
         }
         n += 1;
@@ -133,13 +146,26 @@ pub fn run_export(
     let mut reserved = HashSet::new();
     let mut plan: Vec<PlanItem> = Vec::new();
     let mut failed = Vec::new();
+    // 伴侣文件表按文件夹缓存：每个文件夹只读一次目录（几千张时差别是几十秒 vs 一眨眼）
+    let mut companion_cache: HashMap<PathBuf, HashMap<String, Vec<String>>> = HashMap::new();
     for p in &req.paths {
-        let src = PathBuf::from(p);
-        if !src.is_file() {
-            failed.push(ExportFailure { path: p.clone(), error: "文件不存在".into() });
-            continue;
+        if cancel.load(Ordering::Relaxed) {
+            break;
         }
-        if src.parent().and_then(|d| d.canonicalize().ok()).as_deref() == Some(dest_canon.as_path()) {
+        let src = PathBuf::from(p);
+        match fs::symlink_metadata(&src) {
+            Ok(m) if m.is_file() => {}
+            Ok(_) => {
+                failed.push(ExportFailure { path: p.clone(), error: "不是普通文件".into() });
+                continue;
+            }
+            Err(_) => {
+                failed.push(ExportFailure { path: p.clone(), error: "文件不存在".into() });
+                continue;
+            }
+        }
+        let dir = src.parent().unwrap_or(Path::new("")).to_path_buf();
+        if dir.canonicalize().ok().as_deref() == Some(dest_canon.as_path()) {
             failed.push(ExportFailure { path: p.clone(), error: "源文件已在目标文件夹中".into() });
             continue;
         }
@@ -150,20 +176,38 @@ pub fn run_export(
             ExportMode::Original => true,
             ExportMode::Resize => is_jpeg(&ext) && long_edge(&src).is_some_and(|l| l <= req.max_px),
         };
+        let mut companions: Vec<PathBuf> = Vec::new();
+        if req.include_companions {
+            // 只有 RAW 没有 JPG 的照片（macOS）在缩小导出时会转成 JPG；勾了“同时导出 RAW”就把 RAW 原件也带上
+            if !copy && is_raw(&ext) {
+                companions.push(src.clone());
+            }
+            let map = companion_cache.entry(dir.clone()).or_insert_with(|| companion_map(&dir));
+            companions.extend(map.get(&name).into_iter().flatten().map(|c| dir.join(c)));
+        }
+        // 组内后缀忽略大小写去重（区分大小写的磁盘上可能同时有 IMG_1.CR3 和 img_1.cr3），重复的单独取名
         let mut tails = vec![if copy { tail.to_string() } else { ".jpg".to_string() }];
-        let companions: Vec<PathBuf> = if req.include_companions {
-            let dir = src.parent().unwrap_or(Path::new(""));
-            companions_of(&src).into_iter().map(|c| dir.join(c)).collect()
-        } else {
-            Vec::new()
-        };
-        for c in &companions {
-            let cname = c.file_name().unwrap_or_default().to_string_lossy();
-            tails.push(split_group_stem(&cname).1.to_string());
+        let mut seen: HashSet<String> = tails.iter().map(|t| t.to_lowercase()).collect();
+        let (mut grouped, mut separate) = (Vec::new(), Vec::new());
+        for c in companions {
+            let ctail = split_group_stem(&c.file_name().unwrap_or_default().to_string_lossy()).1.to_string();
+            if seen.insert(ctail.to_lowercase()) {
+                tails.push(ctail);
+                grouped.push(c);
+            } else {
+                separate.push(c);
+            }
         }
         let mut targets = unique_targets(&dest, stem, &tails, &mut reserved).into_iter();
         let target = targets.next().expect("至少有主文件");
-        plan.push(PlanItem { src, target, copy, companions: companions.into_iter().zip(targets).collect() });
+        let mut pairs: Vec<(PathBuf, PathBuf)> = grouped.into_iter().zip(targets).collect();
+        for c in separate {
+            let cname = c.file_name().unwrap_or_default().to_string_lossy().into_owned();
+            let (cstem, ctail) = split_group_stem(&cname);
+            let t = unique_targets(&dest, cstem, &[ctail.to_string()], &mut reserved).remove(0);
+            pairs.push((c, t));
+        }
+        plan.push(PlanItem { src, target, copy, companions: pairs });
     }
 
     let total = req.paths.len();
@@ -176,6 +220,9 @@ pub fn run_export(
     let threads = match req.mode {
         ExportMode::Original => 2,
         ExportMode::Resize => std::thread::available_parallelism().map_or(4, |n| n.get()).clamp(1, 8),
+    };
+    let fail = |path: &Path, error: String| {
+        failed.lock().push(ExportFailure { path: path.to_string_lossy().into_owned(), error });
     };
 
     std::thread::scope(|s| {
@@ -190,24 +237,26 @@ pub fn run_export(
                 let r = if item.copy { copy_original(src, target) } else { resize_one(src, target, req.max_px, req.quality) };
                 match r {
                     Ok(()) => {
-                        exported.fetch_add(1, Ordering::SeqCst);
                         files.fetch_add(1, Ordering::SeqCst);
-                    }
-                    Err(e) => {
-                        let _ = fs::remove_file(target);
-                        failed.lock().push(ExportFailure { path: src.to_string_lossy().into_owned(), error: e });
-                    }
-                }
-                for (csrc, ctarget) in &item.companions {
-                    match copy_original(csrc, ctarget) {
-                        Ok(()) => {
-                            files.fetch_add(1, Ordering::SeqCst);
+                        // 一张照片 = 主文件 + 全部伴侣都成功才算导出成功
+                        let mut whole = true;
+                        for (csrc, ctarget) in &item.companions {
+                            match copy_original(csrc, ctarget) {
+                                Ok(()) => {
+                                    files.fetch_add(1, Ordering::SeqCst);
+                                }
+                                Err(e) => {
+                                    whole = false;
+                                    fail(csrc, e);
+                                }
+                            }
                         }
-                        Err(e) => {
-                            let _ = fs::remove_file(ctarget);
-                            failed.lock().push(ExportFailure { path: csrc.to_string_lossy().into_owned(), error: e });
+                        if whole {
+                            exported.fetch_add(1, Ordering::SeqCst);
                         }
                     }
+                    // 主文件都失败了，伴侣就不单独导出了（导出半组没有意义）
+                    Err(e) => fail(src, e),
                 }
                 let d = done.fetch_add(1, Ordering::SeqCst) + 1;
                 progress(ExportProgress {
@@ -232,8 +281,15 @@ fn long_edge(path: &Path) -> Option<u32> {
     imagesize::size(path).ok().map(|d| d.width.max(d.height) as u32)
 }
 
+/// 复制原文件。目标已存在就报错——绝不覆盖用户已有的文件。
 fn copy_original(src: &Path, target: &Path) -> Result<(), String> {
-    fs::copy(src, target).map_err(|e| e.to_string())?;
+    if occupied(target) {
+        return Err("目标文件已存在".into());
+    }
+    if let Err(e) = fs::copy(src, target) {
+        let _ = fs::remove_file(target); // 复制了一半的残留（上面已确认原本不存在，是我们自己创建的）
+        return Err(e.to_string());
+    }
     if let Ok(mtime) = fs::metadata(src).and_then(|m| m.modified()) {
         if let Ok(f) = fs::File::options().write(true).open(target) {
             let _ = f.set_modified(mtime);
@@ -250,7 +306,16 @@ fn resize_one(src: &Path, target: &Path, max_px: u32, quality: u8) -> Result<(),
     } else {
         rendered.jpeg
     };
-    fs::write(target, bytes).map_err(|e| e.to_string())
+    // create_new：目标若已存在（比如别的程序刚写进来）就失败，绝不覆盖
+    let mut f = fs::File::options().write(true).create_new(true).open(target).map_err(|e| match e.kind() {
+        std::io::ErrorKind::AlreadyExists => "目标文件已存在".to_string(),
+        _ => e.to_string(),
+    })?;
+    use std::io::Write;
+    f.write_all(&bytes).map_err(|e| {
+        drop(fs::remove_file(target));
+        e.to_string()
+    })
 }
 
 #[cfg(test)]
@@ -350,6 +415,58 @@ mod tests {
         let r = run_export(&rq, &AtomicBool::new(false), &|_| {}).unwrap();
         assert_eq!((r.exported, r.files), (1, 1));
         assert!(!out.path().join("jpg-only/IMG_1.CR3").exists());
+    }
+
+    #[test]
+    fn case_insensitive_names_never_overwrite_each_other() {
+        // 缩小导出时：大图重新编码成 IMG_0001.jpg，小图原样复制成 IMG_0001.JPG——在 macOS 上是同一个文件名
+        let a = tempfile::tempdir().unwrap();
+        let b = tempfile::tempdir().unwrap();
+        let out = tempfile::tempdir().unwrap();
+        let big = a.path().join("IMG_0001.JPG");
+        let small = b.path().join("IMG_0001.JPG");
+        fs::write(&big, make_jpeg(3000, 2000)).unwrap();
+        fs::write(&small, make_jpeg(800, 600)).unwrap();
+        let r = run_export(&req(&[&big, &small], out.path(), ExportMode::Resize), &AtomicBool::new(false), &|_| {}).unwrap();
+        assert_eq!(r.exported, 2, "{:?}", r.failed);
+        let mut names: Vec<String> = fs::read_dir(out.path()).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap().to_lowercase()).collect();
+        names.sort();
+        assert_eq!(names, vec!["img_0001 (1).jpg", "img_0001.jpg"], "小写后也不能重名");
+    }
+
+    #[test]
+    fn copy_never_overwrites_and_existing_raw_renames_whole_group() {
+        let a = tempfile::tempdir().unwrap();
+        let out = tempfile::tempdir().unwrap();
+        let raw = a.path().join("IMG_1.CR3");
+        fs::write(&raw, b"raw").unwrap();
+        // 底层保护：目标已存在就拒绝，原文件不动
+        let existing = out.path().join("IMG_1.CR3");
+        fs::write(&existing, b"keep me").unwrap();
+        assert_eq!(copy_original(&raw, &existing), Err("目标文件已存在".into()));
+        assert_eq!(fs::read(&existing).unwrap(), b"keep me");
+
+        // 规划层：已有同名 RAW → 整组改名为 IMG_1 (1).*
+        let jpg = a.path().join("IMG_1.JPG");
+        fs::write(&jpg, make_jpeg(100, 80)).unwrap();
+        let r = run_export(&req(&[&jpg], out.path(), ExportMode::Original), &AtomicBool::new(false), &|_| {}).unwrap();
+        assert_eq!((r.exported, r.files), (1, 2), "{:?}", r.failed);
+        assert!(out.path().join("IMG_1 (1).JPG").exists() && out.path().join("IMG_1 (1).CR3").exists());
+        assert_eq!(fs::read(&existing).unwrap(), b"keep me");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_sources_are_refused() {
+        let a = tempfile::tempdir().unwrap();
+        let out = tempfile::tempdir().unwrap();
+        let real = a.path().join("real.jpg");
+        fs::write(&real, make_jpeg(10, 10)).unwrap();
+        let link = a.path().join("link.jpg");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let r = run_export(&req(&[&link], out.path(), ExportMode::Original), &AtomicBool::new(false), &|_| {}).unwrap();
+        assert_eq!(r.exported, 0);
+        assert_eq!(r.failed[0].error, "不是普通文件");
     }
 
     #[test]

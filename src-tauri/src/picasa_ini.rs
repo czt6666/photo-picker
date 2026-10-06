@@ -16,6 +16,8 @@
 //! 实现上把文件当成“行数组”编辑，只改 `star=` 这一行（或增删整个空段），
 //! 其它内容（人脸、旋转、相册信息等 Picasa 写的东西）原样保留，换行风格（CRLF/LF）也保持不变。
 
+use std::collections::{HashMap, HashSet};
+
 use unicode_normalization::UnicodeNormalization;
 
 #[derive(Debug, Clone, Default)]
@@ -101,60 +103,102 @@ impl IniDoc {
         out
     }
 
+    /// 从段头 `start` 开始的段的结束行（下一个段头或文件末尾）。
+    fn section_end(&self, start: usize) -> usize {
+        self.lines[start + 1..]
+            .iter()
+            .position(|l| section_of(l).is_some())
+            .map_or(self.lines.len(), |i| start + 1 + i)
+    }
+
     /// 段 `[file]` 的行范围 [header, end)。
+    #[cfg(test)]
     fn section_range(&self, file: &str) -> Option<(usize, usize)> {
         let want = norm_name(file);
         let start = self
             .lines
             .iter()
             .position(|l| section_of(l).is_some_and(|s| norm_name(s) == want))?;
-        let end = self.lines[start + 1..]
-            .iter()
-            .position(|l| section_of(l).is_some())
-            .map_or(self.lines.len(), |i| start + 1 + i);
-        Some((start, end))
+        Some((start, self.section_end(start)))
     }
 
-    /// 设置/取消某个文件的星标。返回内容是否有变化。
+    /// 设置/取消某个文件的星标。返回内容是否有变化。（正式代码用批量版 [`Self::set_star_many`]）
+    #[cfg(test)]
     pub fn set_star(&mut self, file: &str, starred: bool) -> bool {
-        match (self.section_range(file), starred) {
-            (Some((start, end)), true) => {
-                if let Some(i) = (start + 1..end).find(|&i| is_star_line(&self.lines[i])) {
-                    if self.lines[i].trim() == "star=yes" {
-                        return false;
-                    }
-                    self.lines[i] = "star=yes".into();
-                } else {
-                    self.lines.insert(start + 1, "star=yes".into());
-                }
-                true
-            }
-            (None, true) => {
+        match self.section_range(file) {
+            Some((start, _)) => self.set_star_at(start, starred),
+            None if starred => {
                 self.lines.push(format!("[{file}]"));
                 self.lines.push("star=yes".into());
                 true
             }
-            (Some((start, end)), false) => {
-                let before = end - start;
-                let body: Vec<String> = self.lines[start + 1..end]
-                    .iter()
-                    .filter(|l| !is_star_line(l))
-                    .cloned()
-                    .collect();
-                if body.len() + 1 == before {
-                    return false; // 本来就没星
-                }
-                let has_content = body.iter().any(|l| key_of(l).is_some());
-                let replacement: Vec<String> = if has_content {
-                    std::iter::once(self.lines[start].clone()).chain(body).collect()
-                } else {
-                    Vec::new() // 段里只剩空行/注释，整段删掉
-                };
-                self.lines.splice(start..end, replacement);
-                true
-            }
-            (None, false) => false,
+            None => false,
         }
+    }
+
+    /// 批量设置。逐个调用 [`set_star`] 时每个文件都要从头扫一遍整个文件找段，
+    /// 几千张一起打星就是“几千 × 几千行”，要好几秒；这里先建一次“文件名 → 行号”索引，
+    /// 已有的段从后往前改（前面的行号不受影响），新段统一追加到末尾。
+    pub fn set_star_many(&mut self, files: &[String], starred: bool) -> bool {
+        let mut index: HashMap<String, usize> = HashMap::new();
+        for (i, l) in self.lines.iter().enumerate() {
+            if let Some(sec) = section_of(l) {
+                index.entry(norm_name(sec)).or_insert(i);
+            }
+        }
+        let mut existing = Vec::new();
+        let mut appended = Vec::new();
+        let mut seen = HashSet::new();
+        for f in files {
+            let key = norm_name(f);
+            if !seen.insert(key.clone()) {
+                continue;
+            }
+            match index.get(&key) {
+                Some(&i) => existing.push(i),
+                None if starred => appended.push(f),
+                None => {}
+            }
+        }
+        existing.sort_unstable_by(|a, b| b.cmp(a));
+        let mut changed = false;
+        for start in existing {
+            changed |= self.set_star_at(start, starred);
+        }
+        for f in appended {
+            self.lines.push(format!("[{f}]"));
+            self.lines.push("star=yes".into());
+            changed = true;
+        }
+        changed
+    }
+
+    /// 修改从 `start` 行开始的那个段。
+    fn set_star_at(&mut self, start: usize, starred: bool) -> bool {
+        let end = self.section_end(start);
+        if starred {
+            if let Some(i) = (start + 1..end).find(|&i| is_star_line(&self.lines[i])) {
+                if self.lines[i].trim() == "star=yes" {
+                    return false;
+                }
+                self.lines[i] = "star=yes".into();
+            } else {
+                self.lines.insert(start + 1, "star=yes".into());
+            }
+            return true;
+        }
+        let body: Vec<String> = self.lines[start + 1..end].iter().filter(|l| !is_star_line(l)).cloned().collect();
+        if body.len() + 1 == end - start {
+            return false; // 本来就没星
+        }
+        let has_content = body.iter().any(|l| key_of(l).is_some());
+        let replacement: Vec<String> = if has_content {
+            std::iter::once(self.lines[start].clone()).chain(body).collect()
+        } else {
+            Vec::new() // 段里只剩空行/注释，整段删掉
+        };
+        self.lines.splice(start..end, replacement);
+        true
     }
 }
 
@@ -214,6 +258,29 @@ mod tests {
         assert!(d.set_star("y.jpg", true));
         assert_eq!(d.starred(), vec!["x.jpg", "y.jpg"]);
         assert!(d.render().starts_with('\u{feff}'));
+    }
+
+    #[test]
+    fn batch_matches_one_by_one_and_is_fast() {
+        let base = "[Picasa]\nname=x\n[a.jpg]\nrotate=rotate(1)\n[b.jpg]\nstar=yes\n[c.jpg]\nstar=yes\nfaces=f\n";
+        let names: Vec<String> = ["c.jpg", "A.JPG", "new.jpg", "b.jpg", "new.jpg"].iter().map(|s| s.to_string()).collect();
+        for starred in [true, false] {
+            let mut one = IniDoc::parse(base);
+            let mut many = IniDoc::parse(base);
+            let c1 = names.iter().fold(false, |acc, n| one.set_star(n, starred) | acc);
+            let c2 = many.set_star_many(&names, starred);
+            assert_eq!(c1, c2);
+            assert_eq!(one.starred(), many.starred(), "starred={starred}");
+        }
+        // 4000 个名字批量加星、再全部取消：要在毫秒级完成（逐个查找是平方级，要好几秒）
+        let big: Vec<String> = (0..4000).map(|i| format!("IMG_{i:04}.JPG")).collect();
+        let mut d = IniDoc::parse("");
+        let t = std::time::Instant::now();
+        assert!(d.set_star_many(&big, true));
+        assert_eq!(d.starred().len(), 4000);
+        assert!(d.set_star_many(&big, false));
+        assert!(d.starred().is_empty());
+        assert!(t.elapsed() < std::time::Duration::from_millis(500), "{:?}", t.elapsed());
     }
 
     #[test]
