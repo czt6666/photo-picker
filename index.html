@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>选片</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <div id="app">
+      <header class="toolbar">
+        <button id="btn-add" class="btn" title="把一个文件夹（及其子文件夹）加入图库">＋ 添加文件夹</button>
+        <button id="btn-rescan" class="btn icon" title="重新扫描图库">⟳</button>
+        <div class="view-title" id="view-title"></div>
+        <label class="toggle" title="只看加了星标的照片（快捷键 Shift+S）">
+          <input type="checkbox" id="chk-starred" />
+          <span class="toggle-ui"><span class="star">★</span> 仅显示星标</span>
+        </label>
+        <input id="search" class="search" type="search" placeholder="搜索文件名" autocomplete="off" spellcheck="false" />
+        <button id="btn-help" class="btn icon" title="快捷键（?）">?</button>
+      </header>
+
+      <div class="main">
+        <aside class="sidebar" id="sidebar"></aside>
+        <section class="content">
+          <div class="grid" id="grid" tabindex="0">
+            <div class="grid-inner" id="grid-inner"></div>
+          </div>
+          <div class="empty" id="empty" hidden></div>
+        </section>
+      </div>
+
+      <footer class="statusbar">
+        <span id="status-count" class="status"></span>
+        <button id="btn-star" class="btn" title="给选中的照片加/取消星标（S 或 ⌘8）">☆ 星标</button>
+        <span id="status-thumbs" class="status dim"></span>
+        <div class="spacer"></div>
+        <label class="zoom" title="缩略图大小">
+          <span class="dim">▫</span>
+          <input type="range" id="zoom" min="90" max="280" step="10" />
+          <span class="dim big">◻</span>
+        </label>
+        <button id="btn-export" class="btn primary" title="导出星标或选中的照片">导出…</button>
+      </footer>
+
+      <div id="viewer" class="viewer" hidden>
+        <div class="v-top">
+          <button class="btn v-back" title="返回图库（Esc）">← 图库</button>
+          <div class="v-title"><span class="v-name"></span><span class="v-pos dim"></span></div>
+          <div class="v-actions">
+            <button class="btn v-zoom" title="适合窗口 ↔ 1:1 实际像素（1 或双击）">1:1</button>
+            <button class="btn v-star" title="加/取消星标（S 或 ⌘8）">☆ 星标</button>
+            <button class="btn v-full" title="全屏（F）">⛶</button>
+          </div>
+        </div>
+        <div class="v-stage">
+          <img class="v-low" alt="" draggable="false" />
+          <div class="v-starmark" hidden>★</div>
+          <div class="v-error" hidden></div>
+        </div>
+        <div class="v-info dim"></div>
+        <div class="v-strip"><div class="v-strip-inner"></div></div>
+      </div>
+
+      <div id="export-dialog" class="modal" hidden></div>
+      <div id="toasts" class="toasts"></div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

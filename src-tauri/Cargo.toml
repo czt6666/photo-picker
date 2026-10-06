@@ -1,0 +1,51 @@
+[package]
+name = "photo-picker"
+version = "0.1.0"
+description = "仿 Picasa 3 的选片工具：滚轮秒切、星标、筛选、导出"
+edition = "2021"
+rust-version = "1.77"
+
+[lib]
+name = "photo_picker_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "gif", "bmp", "tiff"] }
+jpeg-decoder = { version = "0.3", default-features = false }
+kamadak-exif = "0.6"
+imagesize = "0.15"
+walkdir = "2"
+blake3 = "1"
+parking_lot = "0.12"
+percent-encoding = "2"
+unicode-normalization = "0.1"
+lru = "0.18"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "0.10"
+core-foundation-sys = "0.8"
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+strip = true
+
+# 图像解码/缩放在未优化时慢 10~30 倍，开发时也要开优化，否则体验失真。
+# 注意 image crate 的泛型函数（缩放、编码）是在本 crate 里实例化的，所以本 crate 也要开。
+[profile.dev]
+opt-level = 2
+
+[profile.dev.package."*"]
+opt-level = 3

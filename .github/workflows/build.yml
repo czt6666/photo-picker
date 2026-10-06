@@ -1,0 +1,71 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write # 打 tag 时把 dmg 挂到 Release 上
+
+jobs:
+  # 快速检查：前端类型检查 + 单测，Rust 单测（Linux 上跑纯 Rust 解码路径）
+  test-linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - name: 系统依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev libxdo-dev
+      - run: npm ci
+      - run: npx tsc --noEmit
+      - run: npm test
+      - run: npm run build
+      - name: cargo test
+        working-directory: src-tauri
+        run: cargo test
+
+  # macOS：在真 Mac 上跑单测（覆盖 ImageIO 解码路径），并打包通用版 dmg（Apple 芯片 + Intel）
+  # 私有仓库的 macOS 运行时长按 10 倍计费，所以 PR 上不跑，只在 main / tag / 手动触发时跑
+  macos:
+    if: github.event_name != 'pull_request'
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - run: npm ci
+      - name: cargo test（含 macOS ImageIO 测试）
+        working-directory: src-tauri
+        run: cargo test
+      - name: 打包 dmg
+        run: npx tauri build --target universal-apple-darwin
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PhotoPicker-macOS
+          path: src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
+          if-no-files-found: error
+      - name: 发布到 Release（仅 tag）
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg --generate-notes
