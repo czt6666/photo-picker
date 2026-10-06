@@ -82,7 +82,7 @@ impl Settings {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Library {
     workdir: Option<String>,
     recent: Vec<String>,
@@ -96,8 +96,11 @@ pub struct AppState {
     /// 上次扫描结果。启动时先用它秒开侧栏，再在后台重新扫描（大图库扫一遍可能要好几秒）
     library_cache_path: PathBuf,
     scanning: AtomicBool,
-    /// 工作目录“代数”：每次切换 +1。扫描开始时记下，结束时代数变了就说明用户已经换了目录，结果作废
+    /// 工作目录“代数”：每次**有效的**切换都会把它推高。扫描开始时记下，结束时代数变了就说明用户已经换了目录，结果作废
     workdir_gen: AtomicU64,
+    /// 切换请求的票号：请求一到达就领（在任何磁盘操作之前），保证“最后一次选择生效”；
+    /// 但只有通过校验后才用它推高代数——无效的切换（拖进整个磁盘、目录不存在）不会作废任何人
+    switch_ticket: AtomicU64,
     /// 星标写入的流水号，以及每个文件夹最后一次写星标时的流水号。扫描开始时记下当前流水号，
     /// 写回结果时，凡是流水号比它新的文件夹都重算星标数——几次扫描同时进行也不会互相把新星标数盖掉
     star_seq: AtomicU64,
@@ -130,6 +133,7 @@ impl AppState {
             library_cache_path,
             scanning: AtomicBool::new(false),
             workdir_gen: AtomicU64::new(0),
+            switch_ticket: AtomicU64::new(0),
             star_seq: AtomicU64::new(0),
             star_stamp: Mutex::new(HashMap::new()),
             settings: Mutex::new(settings),
@@ -153,12 +157,13 @@ impl AppState {
     /// 注意：会对“最近”里的每个目录做一次 stat（网络盘断线时可能很慢），只能在后台线程里调用，
     /// 而且 stat 时不持有任何锁。
     fn library(&self) -> Library {
-        let (workdir, recent) = {
+        // 工作目录和相册列表在同一把锁里一起取，保证是同一时刻的快照（锁顺序与 commit_scan 一致：settings → folders）
+        let (workdir, recent, folders) = {
             let s = self.settings.lock();
-            (s.workdir.clone(), s.recent.clone())
+            (s.workdir.clone(), s.recent.clone(), self.folders.read().clone())
         };
         let missing = recent.iter().filter(|r| Some(*r) != workdir.as_ref() && !Path::new(r).is_dir()).cloned().collect();
-        Library { workdir, recent, missing, folders: self.folders.read().clone() }
+        Library { workdir, recent, missing, folders }
     }
 
     /// 扫描结束时把结果写回：只有在扫描期间工作目录没被切换过才写（在设置锁里判断并写入，原子完成）。
@@ -168,15 +173,19 @@ impl AppState {
         gen: u64,
         workdir: Option<String>,
         mut folders: Vec<Folder>,
-        settings: Option<Settings>,
+        switch_to: bool,
         star_start: u64,
     ) -> Option<Library> {
         let mut s = self.settings.lock();
         if self.workdir_gen.load(Ordering::SeqCst) != gen {
             return None;
         }
-        if let Some(new) = settings {
-            // 设置也在这里（判断过没被抢先之后）才落盘，免得一个作废的切换把旧目录写进设置文件
+        if switch_to {
+            // 在锁里基于“当前”设置修改并落盘（判断过没被抢先之后），不会吞掉期间别的修改（如移除最近目录）
+            let mut new = s.clone();
+            if let Some(w) = &workdir {
+                new.use_workdir(w.clone());
+            }
             if let Err(e) = self.save_settings(&new) {
                 eprintln!("[settings] 保存失败：{e}");
             }
@@ -207,7 +216,7 @@ impl AppState {
         let workdir = self.settings.lock().workdir.clone();
         let star_start = self.star_seq.load(Ordering::SeqCst);
         let folders = workdir.as_deref().map(|w| scan::scan_root(Path::new(w), &self.stars)).unwrap_or_default();
-        self.commit_scan(gen, workdir, folders, None, star_start)
+        self.commit_scan(gen, workdir, folders, false, star_start)
     }
 
     fn persist_folders(&self) {
@@ -266,11 +275,15 @@ async fn rescan(state: AppStateRef<'_>) -> Result<Library, String> {
 #[tauri::command]
 async fn set_workdir(path: String, state: AppStateRef<'_>) -> Result<Library, String> {
     let st = state.inner().clone();
-    // 代数号必须按“请求到达的顺序”领，而且在任何磁盘操作之前：检查一个正在唤醒的移动硬盘可能卡好几秒，
+    // 票号必须按“请求到达的顺序”领，而且在任何磁盘操作之前：检查一个正在唤醒的移动硬盘可能卡好几秒，
     // 若之后才领号，较早的请求反而会拿到更大的号、最后生效。
-    let gen = st.workdir_gen.fetch_add(1, Ordering::SeqCst) + 1;
-    blocking(move || {
-        let mut p = PathBuf::from(&path);
+    let ticket = st.switch_ticket.fetch_add(1, Ordering::SeqCst) + 1;
+    blocking(move || st.switch_workdir(&path, ticket)).await
+}
+
+impl AppState {
+    fn switch_workdir(&self, path: &str, ticket: u64) -> Result<Library, String> {
+        let mut p = PathBuf::from(path);
         // 拖进来的是照片文件：用它所在的文件夹
         if p.is_file() {
             p = p.parent().map(Path::to_path_buf).ok_or("无效路径")?;
@@ -282,13 +295,12 @@ async fn set_workdir(path: String, state: AppStateRef<'_>) -> Result<Library, St
         if dir.is_empty() {
             return Err("请选择具体的照片文件夹，而不是整个磁盘".into());
         }
-        let star_start = st.star_seq.load(Ordering::SeqCst);
-        let folders = scan::scan_root(Path::new(&dir), &st.stars);
-        let mut s = st.settings.lock().clone();
-        s.use_workdir(dir.clone());
-        st.commit_scan(gen, Some(dir), folders, Some(s), star_start).ok_or_else(|| SUPERSEDED.to_string())
-    })
-    .await
+        // 通过校验了：用票号推高代数，作废更早的切换和正在进行的重扫（fetch_max：比我晚到的有效请求已推得更高时，我自己作废）
+        self.workdir_gen.fetch_max(ticket, Ordering::SeqCst);
+        let star_start = self.star_seq.load(Ordering::SeqCst);
+        let folders = scan::scan_root(Path::new(&dir), &self.stars);
+        self.commit_scan(ticket, Some(dir), folders, true, star_start).ok_or_else(|| SUPERSEDED.to_string())
+    }
 }
 
 /// 扫描期间用户又切换了工作目录：这次结果作废。前端认得这个字符串，静默忽略。
@@ -299,13 +311,16 @@ const SUPERSEDED: &str = "superseded";
 async fn forget_workdir(path: String, state: AppStateRef<'_>) -> Result<Library, String> {
     let st = state.inner().clone();
     blocking(move || {
-        let mut s = st.settings.lock().clone();
+        // 读-改-写全在一把锁里：不会和同时提交的工作目录切换互相覆盖
+        let mut s = st.settings.lock();
         if s.workdir.as_deref() == Some(path.as_str()) {
             return Err("不能移除当前的工作目录".into());
         }
-        s.recent.retain(|r| r != &path);
-        st.save_settings(&s)?;
-        *st.settings.lock() = s;
+        let mut next = s.clone();
+        next.recent.retain(|r| r != &path);
+        st.save_settings(&next)?;
+        *s = next;
+        drop(s); // library() 还要拿这把锁（不可重入）
         Ok(st.library())
     })
     .await
@@ -653,17 +668,17 @@ mod tests {
         photo_dir(&a, "x", &["1.jpg"]);
         photo_dir(&b, "y", &["2.jpg"]);
         // 模拟：切到 A 的扫描还没结束，用户又切到了 B（代数 +1）
-        let gen_a = st.workdir_gen.fetch_add(1, Ordering::SeqCst) + 1;
+        let gen_a = 1;
+        st.workdir_gen.fetch_max(gen_a, Ordering::SeqCst);
         let folders_a = scan::scan_root(&a, &st.stars);
-        let gen_b = st.workdir_gen.fetch_add(1, Ordering::SeqCst) + 1;
-        let mut sb = Settings::default();
-        sb.use_workdir(b.to_string_lossy().into_owned());
-        let lib = st.commit_scan(gen_b, sb.workdir.clone(), scan::scan_root(&b, &st.stars), Some(sb), 0).unwrap();
+        let gen_b = 2;
+        st.workdir_gen.fetch_max(gen_b, Ordering::SeqCst);
+        let b_dir = Some(b.to_string_lossy().into_owned());
+        let lib = st.commit_scan(gen_b, b_dir, scan::scan_root(&b, &st.stars), true, 0).unwrap();
         assert_eq!(lib.folders[0].name, "y");
         // A 的结果后到：作废，不覆盖 B，也不写进设置文件
-        let mut sa = Settings::default();
-        sa.use_workdir(a.to_string_lossy().into_owned());
-        assert!(st.commit_scan(gen_a, sa.workdir.clone(), folders_a, Some(sa), 0).is_none());
+        let a_dir = Some(a.to_string_lossy().into_owned());
+        assert!(st.commit_scan(gen_a, a_dir, folders_a, true, 0).is_none());
         assert_eq!(st.library().workdir.as_deref(), Some(b.to_string_lossy().as_ref()));
         let saved = Settings::parse(fs::read(&st.settings_path).ok().as_deref());
         assert_eq!(saved.workdir.as_deref(), Some(b.to_string_lossy().as_ref()));
@@ -672,14 +687,37 @@ mod tests {
     }
 
     #[test]
+    fn invalid_switch_supersedes_nobody_and_last_valid_choice_wins() {
+        let (t, st) = state();
+        let w = t.path().join("W");
+        let x = t.path().join("X");
+        let y = t.path().join("Y");
+        photo_dir(&w, "w1", &["1.jpg"]);
+        photo_dir(&x, "x1", &["1.jpg"]);
+        photo_dir(&y, "y1", &["1.jpg"]);
+        st.switch_workdir(&w.to_string_lossy(), 1).unwrap();
+
+        // 后台重扫开始……期间用户拖进来一个无效路径：重扫结果不能被作废
+        let gen = st.workdir_gen.load(Ordering::SeqCst);
+        let folders = scan::scan_root(&w, &st.stars);
+        assert!(st.switch_workdir("/", 2).is_err());
+        assert!(st.switch_workdir(&t.path().join("nope").to_string_lossy(), 3).is_err());
+        assert!(st.commit_scan(gen, Some(w.to_string_lossy().into_owned()), folders, false, 0).is_some());
+
+        // 票号 4 的 X、票号 5 的 Y 都有效：不管谁先校验完，最后都是 Y（后到的那次）
+        assert_eq!(st.switch_workdir(&y.to_string_lossy(), 5).unwrap().folders[0].name, "y1");
+        assert_eq!(st.switch_workdir(&x.to_string_lossy(), 4), Err(SUPERSEDED.to_string()));
+        assert_eq!(st.library().workdir.as_deref(), Some(y.to_string_lossy().as_ref()));
+    }
+
+    #[test]
     fn star_counts_changed_during_scan_survive_the_commit() {
         let (t, st) = state();
         let w = t.path().join("W");
         photo_dir(&w, "album", &["1.jpg", "2.jpg"]);
-        let mut s = Settings::default();
-        s.use_workdir(w.to_string_lossy().into_owned());
+        let wd = Some(w.to_string_lossy().into_owned());
         let gen = st.workdir_gen.load(Ordering::SeqCst);
-        st.commit_scan(gen, s.workdir.clone(), scan::scan_root(&w, &st.stars), Some(s.clone()), 0).unwrap();
+        st.commit_scan(gen, wd.clone(), scan::scan_root(&w, &st.stars), true, 0).unwrap();
         // 两次重扫同时开始（都读到 0 星）……
         let start1 = st.star_seq.load(Ordering::SeqCst);
         let stale1 = scan::scan_root(&w, &st.stars);
@@ -691,8 +729,8 @@ mod tests {
         let stamp = st.star_seq.fetch_add(1, Ordering::SeqCst) + 1;
         st.star_stamp.lock().insert(album.to_string_lossy().into_owned(), stamp);
         // 两次扫描先后写回：第二次也不能用旧的 0 星把新星标数盖掉
-        assert_eq!(st.commit_scan(gen, s.workdir.clone(), stale1, None, start1).unwrap().folders[0].starred, 1);
-        assert_eq!(st.commit_scan(gen, s.workdir.clone(), stale2, None, start2).unwrap().folders[0].starred, 1);
+        assert_eq!(st.commit_scan(gen, wd.clone(), stale1, false, start1).unwrap().folders[0].starred, 1);
+        assert_eq!(st.commit_scan(gen, wd.clone(), stale2, false, start2).unwrap().folders[0].starred, 1);
     }
 
     #[test]

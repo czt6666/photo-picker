@@ -116,6 +116,8 @@ export function openExportDialog(): void {
   const fill = $('.fill');
   const ptext = $('.ptext');
   let running = false;
+  /** 已点“导出”、正在准备照片列表（等星标写完、读星标相册）——防止双击发出两次导出 */
+  let starting = false;
   let unlisten: (() => void) | null = null;
 
   const close = () => {
@@ -145,6 +147,7 @@ export function openExportDialog(): void {
 
   go.onclick = async () => {
     if (go.dataset.done) return close();
+    if (running || starting) return;
     if (store.library.workdir !== workdirAtOpen) {
       toast('工作目录已经切换，请重新打开导出对话框', 'warn');
       return close();
@@ -160,8 +163,24 @@ export function openExportDialog(): void {
     if (scopeVal === 'selected') photos = selected;
     else if (scopeVal === 'view-starred') photos = viewStarred;
     else {
-      await store.starsSettled(); // 刚打的星还在排队写盘时先等它写完，否则会漏掉
-      photos = await api.listStarred();
+      starting = true;
+      go.disabled = true;
+      try {
+        await store.starsSettled(); // 刚打的星还在排队写盘时先等它写完，否则会漏掉
+        photos = await api.listStarred();
+      } catch (e) {
+        photos = [];
+        toast(`读取星标照片失败：${e}`, 'error');
+      } finally {
+        starting = false;
+        go.disabled = false;
+      }
+      // 等待期间对话框被关掉/重开，或者工作目录变了：这次点击作废
+      if (closeCurrent !== close) return;
+      if (store.library.workdir !== workdirAtOpen) {
+        toast('工作目录已经切换，请重新打开导出对话框', 'warn');
+        return close();
+      }
     }
     if (!photos.length) return toast('没有可导出的照片', 'warn');
 

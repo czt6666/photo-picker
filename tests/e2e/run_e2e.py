@@ -285,8 +285,11 @@ def run(d, env, export_dir):
     js(d, "document.querySelector('#export-dialog .sub').value = '精选'")
     js(d, "document.querySelector('#export-dialog input[name=mode][value=resize]').checked = true")
     js(d, "const s = document.querySelector('#export-dialog .maxpx'); s.value = '2048'")
-    d.find_element(By.CSS_SELECTOR, "#export-dialog .go").click()
+    # 连点两下“导出”：只能导出一次，不能出现“导出失败”
+    js(d, "const g = document.querySelector('#export-dialog .go'); g.click(); g.click();")
     ok = wait(lambda: "完成" in d.find_element(By.CSS_SELECTOR, "#export-dialog .ptext").text, timeout=60)
+    check("连点两下导出只导出一次", ok and "失败" not in d.find_element(By.CSS_SELECTOR, "#export-dialog .ptext").text,
+          d.find_element(By.CSS_SELECTOR, "#export-dialog .ptext").text)
     out = sorted(p.name for p in (export_dir / "精选").glob("*")) if (export_dir / "精选").exists() else []
     check("导出全部星标照片（缩小到 2048），同名 CR3 一起导出", out == ["DSC_10.jpg", "DSC_25.jpg", "IMG_0005.CR3", "IMG_0005.jpg"], str(out))
     if "IMG_0005.CR3" in out:

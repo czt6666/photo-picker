@@ -3,11 +3,11 @@
 仿 **Picasa 3** 的 macOS 选片工具。Picasa 停更多年、Mac 上早已装不了，这里把它最好用的那一套
 “看图 → 打星 → 筛出星标 → 导出”重新做了一遍，并且把**滚轮翻图不卡**当成第一目标。
 
-| 图库网格 | 看大图（滚轮翻页 + 底部胶片条） |
+| 相册网格（RAW+JPG 显示 CR3 角标） | 看大图（滚轮翻页 + 底部胶片条） |
 |---|---|
 | ![网格](docs/screenshots/grid.jpg) | ![看大图](docs/screenshots/viewer.jpg) |
-| **已加星标的照片**（汇总所有文件夹） | **导出**（原图 / 缩小，保留 EXIF） |
-| ![星标相册](docs/screenshots/starred.jpg) | ![导出](docs/screenshots/export.jpg) |
+| **导出**（原图 / 缩小，RAW 一起导出） | **工作目录**（最近用过的一键切换） |
+| ![导出](docs/screenshots/export.jpg) | ![工作目录](docs/screenshots/workdir.jpg) |
 
 （截图里是自动生成的测试图片）
 
@@ -209,9 +209,10 @@ python3 tests/e2e/run_e2e.py /tmp/pp-e2e
 cd src-tauri && PP_BENCH_FILE=/path/to/big.jpg cargo test --release bench_render -- --ignored --nocapture
 ```
 
-端到端测试（42 项）覆盖：工作目录（切换、重启后记住、最近列表）、读取已有 Picasa 星标、虚拟化网格、仅显示星标、
+端到端测试（47 项）覆盖：工作目录（切换、重启后记住、最近列表）、读取已有 Picasa 星标、虚拟化网格、仅显示星标、
 空格 / 多选打星并写回 `.picasa.ini`、RAW+JPG 合并显示与成对打星 / 导出、滚轮一格一张、预加载命中率、EXIF 竖拍转正、
-1:1 加载原图、星标相册、缩小导出保留 EXIF、原图导出字节一致、协议拒绝访问工作目录以外的文件。
+1:1 加载原图、星标相册、缩小导出保留 EXIF、原图导出字节一致、连点导出只导出一次、“未连接”目录置灰与清理、
+协议拒绝访问工作目录以外的文件。
 
 ## 已知限制 / 下一步
 

@@ -236,6 +236,10 @@ async function chooseWorkdir(): Promise<void> {
 }
 
 let switchSeq = 0;
+/** 最新一次切换（switchSeq）已经以失败告终时等于它：这时更早发出、后来才成功的切换就是后台的最终状态，应当采用 */
+let failedSeq = 0;
+/** 每次界面切到某个工作目录 +1，用来识别“等待期间界面已被别的结果改过” */
+let applyEpoch = 0;
 
 /** 切换工作目录：扫描它下面所有含照片的子文件夹（相册），打开上次看的或第一个相册。
  *  扫描期间旧目录照常可用（后端扫完才切换）；期间又选了别的目录，以最后一次为准。 */
@@ -256,21 +260,18 @@ async function switchWorkdir(path: string): Promise<void> {
   try {
     lib = await api.setWorkdir(path);
   } catch (e) {
-    if (String(e).includes('superseded')) return; // 被后来的切换取代了
-    if (seq === switchSeq) {
-      thumbsEl.textContent = '';
-      const missing = String(e).includes('不存在');
-      toast(missing ? `找不到 ${path}（移动硬盘没连接？）。可在工作目录菜单里把它从“最近”中移除。` : `无法打开：${e}`, 'error', 5000);
-    }
-    // 这次失败了，但更早发出的一次切换可能已经在后台生效：以后台为准对齐界面
-    await syncWithBackend();
+    if (String(e).includes('superseded')) return; // 被后来的有效切换取代了，由它收尾
+    if (seq !== switchSeq) return; // 有更新的切换在途，由它收尾
+    failedSeq = seq;
+    thumbsEl.textContent = '';
+    const missing = String(e).includes('不存在');
+    toast(missing ? `找不到 ${path}（移动硬盘没连接？）。可在工作目录菜单里把它从“最近”中移除。` : `无法打开：${e}`, 'error', 5000);
+    // 这次失败了，但更早发出的一次有效切换可能已经在后台生效：以后台为准对齐界面
+    await syncWithBackend(seq);
     return;
   }
-  if (seq !== switchSeq) {
-    // 本次结果过时（用户又选了别的）；如果那次后来的切换失败了，后台停在本次的目录上，同样以后台为准
-    await syncWithBackend();
-    return;
-  }
+  // 本次结果过时：更新的切换还在途就交给它；更新的切换都失败了，那后台的最终状态就是本次
+  if (seq !== switchSeq && failedSeq !== switchSeq) return;
   applyWorkdir(lib);
   await openInitialView(lib);
   if (lib.folders.length) {
@@ -279,10 +280,13 @@ async function switchWorkdir(path: string): Promise<void> {
   }
 }
 
-/** 后台当前的工作目录和界面显示的不一致时（切换请求交错、失败），把界面对齐到后台 */
-async function syncWithBackend(): Promise<void> {
+/** 后台当前的工作目录和界面显示的不一致时（切换请求交错、失败），把界面对齐到后台。
+ *  只有最新一次切换才对齐，而且等待期间界面若已被别的结果更新过就放弃（那份快照已过时）。 */
+async function syncWithBackend(seq: number): Promise<void> {
+  if (seq !== switchSeq) return;
+  const epoch = applyEpoch;
   const lib = await api.getLibrary().catch(() => null);
-  if (!lib) return;
+  if (!lib || seq !== switchSeq || epoch !== applyEpoch) return;
   if (lib.workdir !== store.library.workdir) {
     applyWorkdir(lib);
     await openInitialView(lib);
@@ -293,6 +297,7 @@ async function syncWithBackend(): Promise<void> {
 
 /** 界面切到一个新的工作目录：关掉还停留在旧目录照片上的看图器和（没在导出的）导出对话框 */
 function applyWorkdir(lib: Library): void {
+  applyEpoch++;
   thumbsEl.textContent = '';
   if (viewer.opened) viewer.close();
   if (isExportOpen()) closeExportDialog(); // 正在导出时它不会关，导出用的是开始时的照片列表，不受影响

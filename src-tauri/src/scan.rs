@@ -153,7 +153,7 @@ pub fn folder_counts(dir: &Path, stars: &StarStore) -> (usize, usize) {
     (groups.len(), starred)
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Folder {
     pub path: String,
     /// 文件夹名
