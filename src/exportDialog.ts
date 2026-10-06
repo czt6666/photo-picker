@@ -34,6 +34,7 @@ export function closeExportDialog(): void {
 export function openExportDialog(): void {
   const el = document.getElementById('export-dialog')!;
   const p = prefs.get<ExportPrefs>('export', { dest: '', mode: 'original', maxPx: 2048, quality: 90 });
+  const workdirAtOpen = store.library.workdir;
   const viewStarred = store.all.filter((x) => x.starred);
   const selected = store.selectedPhotos();
   const allStarred = store.totalStarred();
@@ -144,6 +145,10 @@ export function openExportDialog(): void {
 
   go.onclick = async () => {
     if (go.dataset.done) return close();
+    if (store.library.workdir !== workdirAtOpen) {
+      toast('工作目录已经切换，请重新打开导出对话框', 'warn');
+      return close();
+    }
     const scopeVal = el.querySelector<HTMLInputElement>('input[name=scope]:checked')?.value as Scope | undefined;
     const mode = (el.querySelector<HTMLInputElement>('input[name=mode]:checked')?.value ?? 'original') as ExportMode;
     if (!scopeVal) return toast('没有可导出的照片', 'warn');
@@ -154,7 +159,10 @@ export function openExportDialog(): void {
     let photos: Photo[];
     if (scopeVal === 'selected') photos = selected;
     else if (scopeVal === 'view-starred') photos = viewStarred;
-    else photos = await api.listStarred();
+    else {
+      await store.starsSettled(); // 刚打的星还在排队写盘时先等它写完，否则会漏掉
+      photos = await api.listStarred();
+    }
     if (!photos.length) return toast('没有可导出的照片', 'warn');
 
     const withRaw = $<HTMLInputElement>('.with-raw').checked;

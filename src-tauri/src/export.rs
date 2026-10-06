@@ -19,7 +19,7 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
 use crate::decode::render_jpeg;
-use crate::formats::{ext_of, is_jpeg, is_raw};
+use crate::formats::{ext_of, is_companion, is_jpeg, is_raw, is_supported_ext};
 use crate::meta::{read_jpeg_head, transplant_metadata};
 use crate::picasa_ini::norm_name;
 use crate::scan::{companion_map, split_group_stem};
@@ -94,10 +94,20 @@ fn sanitize(name: &str) -> String {
         .to_string()
 }
 
-/// 目标路径的“占用键”。macOS 默认的 APFS 不区分大小写：`IMG_1.jpg` 和 `IMG_1.JPG` 是同一个文件，
-/// 所以分配名字时按规范化后的小写比较，否则两张图会互相覆盖。
-fn reserve_key(p: &Path) -> String {
-    norm_name(&p.to_string_lossy())
+/// 已被占用的“组名”（规范化：NFC + 小写，因为 macOS 默认的 APFS 不区分大小写）。
+///
+/// 按组名而不是按完整文件名占位：否则 A 文件夹只有 JPG 的 `IMG_1.JPG` 和 B 文件夹只有 RAW 的
+/// `IMG_1.CR3` 导出到同一处后，会被当成一对 RAW+JPG。目标文件夹里已有的图片/RAW/xmp 也按组名算占用。
+fn taken_stems(dest: &Path) -> HashSet<String> {
+    let Ok(rd) = fs::read_dir(dest) else { return HashSet::new() };
+    rd.flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| {
+            let ext = n.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase()).unwrap_or_default();
+            is_supported_ext(&ext) || is_companion(&ext)
+        })
+        .map(|n| norm_name(split_group_stem(&n).0))
+        .collect()
 }
 
 /// 目标位置已经有东西（包括失效的符号链接——`exists()` 会把它当成不存在，复制时却会顺着链接写到别处）。
@@ -105,16 +115,16 @@ fn occupied(p: &Path) -> bool {
     fs::symlink_metadata(p).is_ok()
 }
 
-/// 为一组文件找一套不冲突的目标路径。`tails` 是每个文件名去掉组名后的部分（如 `.JPG`、`.CR3`、`.CR3.xmp`），
-/// 调用方保证组内的后缀互不相同（忽略大小写）。
-/// 不冲突时用原名；有任何一个冲突，整组一起改成 `组名 (n)` + 各自的后缀：a.jpg → a (1).jpg → a (2).jpg …
-fn unique_targets(dir: &Path, stem: &str, tails: &[String], reserved: &mut HashSet<String>) -> Vec<PathBuf> {
+/// 为一组文件找一套不冲突的目标路径。`tails` 是每个文件名去掉组名后的部分（如 `.JPG`、`.CR3`、`.CR3.xmp`）。
+/// 组名没被占用、且每个目标文件都不存在时用原名；否则整组一起改成 `组名 (n)` + 各自的后缀：a.jpg → a (1).jpg …
+fn unique_targets(dir: &Path, stem: &str, tails: &[String], taken: &mut HashSet<String>) -> Vec<PathBuf> {
     let mut n = 0;
     loop {
         let base = if n == 0 { stem.to_string() } else { format!("{stem} ({n})") };
+        let key = norm_name(&base);
         let paths: Vec<PathBuf> = tails.iter().map(|t| dir.join(format!("{base}{t}"))).collect();
-        if paths.iter().all(|p| !occupied(p) && !reserved.contains(&reserve_key(p))) {
-            reserved.extend(paths.iter().map(|p| reserve_key(p)));
+        if !taken.contains(&key) && paths.iter().all(|p| !occupied(p)) {
+            taken.insert(key);
             return paths;
         }
         n += 1;
@@ -143,7 +153,7 @@ pub fn run_export(
     let dest_canon = dest.canonicalize().unwrap_or_else(|_| dest.clone());
 
     // 先串行地为每张图分配好目标文件名，后面并行处理时就不会抢同一个名字
-    let mut reserved = HashSet::new();
+    let mut reserved = taken_stems(&dest);
     let mut plan: Vec<PlanItem> = Vec::new();
     let mut failed = Vec::new();
     // 伴侣文件表按文件夹缓存：每个文件夹只读一次目录（几千张时差别是几十秒 vs 一眨眼）
@@ -453,6 +463,25 @@ mod tests {
         assert_eq!((r.exported, r.files), (1, 2), "{:?}", r.failed);
         assert!(out.path().join("IMG_1 (1).JPG").exists() && out.path().join("IMG_1 (1).CR3").exists());
         assert_eq!(fs::read(&existing).unwrap(), b"keep me");
+    }
+
+    #[test]
+    fn unrelated_photos_with_same_stem_are_not_paired_after_export() {
+        // A 里只有 JPG，B 里只有一个同名的 PNG（各自独立的照片）；目标里还已有一个 IMG_7.CR3
+        let a = tempfile::tempdir().unwrap();
+        let b = tempfile::tempdir().unwrap();
+        let out = tempfile::tempdir().unwrap();
+        let jpg = a.path().join("IMG_7.JPG");
+        let png = b.path().join("IMG_7.png");
+        fs::write(&jpg, make_jpeg(20, 20)).unwrap();
+        image::RgbImage::new(4, 4).save(&png).unwrap();
+        fs::write(out.path().join("IMG_7.CR3"), b"someone else's raw").unwrap();
+        let r = run_export(&req(&[&jpg, &png], out.path(), ExportMode::Original), &AtomicBool::new(false), &|_| {}).unwrap();
+        assert_eq!(r.exported, 2, "{:?}", r.failed);
+        let mut names: Vec<_> = fs::read_dir(out.path()).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).collect();
+        names.sort();
+        // 已有的 IMG_7.CR3 占了“IMG_7”这个组名 → JPG 改名为 IMG_7 (1)；PNG 又换一个组名，三者互不配对
+        assert_eq!(names, vec!["IMG_7 (1).JPG", "IMG_7 (2).png", "IMG_7.CR3"]);
     }
 
     #[cfg(unix)]

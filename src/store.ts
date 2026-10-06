@@ -23,6 +23,19 @@ class Store {
   focus: string | null = null;
 
   private listeners = new Map<Topic, Set<Listener>>();
+  private starChain: Promise<unknown> = Promise.resolve();
+
+  /** 星标写入排队：一个写完再发下一个，保证“先加星、马上取消”最后落盘的是“取消” */
+  queueStarWrite<T>(write: () => Promise<T>): Promise<T> {
+    const job = this.starChain.then(write);
+    this.starChain = job.catch(() => {});
+    return job;
+  }
+
+  /** 等排队中的星标写完：读列表（尤其是“已加星标”相册）之前调用，才能看到刚打的星 */
+  starsSettled(): Promise<void> {
+    return this.starChain.then(() => undefined);
+  }
 
   on(topic: Topic, fn: Listener): void {
     if (!this.listeners.has(topic)) this.listeners.set(topic, new Set());

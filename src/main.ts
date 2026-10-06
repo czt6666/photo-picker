@@ -56,7 +56,7 @@ const sidebar = new Sidebar($('sidebar'), {
       { label: '重新扫描工作目录', action: () => void rescan() },
     ]);
   },
-  workdirMenu: (x, y) => showWorkdirMenu(x, y),
+  workdirMenu: (x, y) => void showWorkdirMenu(x, y),
 });
 
 // ---------------------------------------------------------------------------
@@ -77,9 +77,11 @@ async function showView(view: View, load: () => Promise<Photo[]>): Promise<boole
   const seq = ++viewSeq;
   let photos: Photo[];
   try {
+    await store.starsSettled(); // 刚打的星还在排队写盘时，等它写完再读列表
     photos = await load();
   } catch (e) {
-    if (seq === viewSeq) toast(`读取失败：${e}`, 'error');
+    if (seq !== viewSeq) return true; // 用户已经去了别处，这次失败无所谓
+    toast(`读取失败：${e}`, 'error');
     return false;
   }
   if (seq !== viewSeq) return true; // 用户已经点了别的文件夹
@@ -97,6 +99,7 @@ const openFolder = (path: string) => showView({ kind: 'folder', path }, () => ap
 const openStarred = () => showView({ kind: 'starred' }, () => api.listStarred());
 
 function showEmptyView(): void {
+  ++viewSeq; // 让还在路上的旧相册加载结果作废
   store.setPhotos({ kind: 'none' }, []);
   sidebar.render();
   grid.reset();
@@ -179,9 +182,6 @@ function starTargets(): Photo[] {
 }
 
 /** 像 Picasa 一样：选中的照片里只要有没加星的，就全部加星；否则全部取消。 */
-/** 星标请求排队：一个写完再发下一个，保证“先加星、马上取消”最后落盘的是“取消” */
-let starChain: Promise<unknown> = Promise.resolve();
-
 async function toggleStar(photos: Photo[]): Promise<void> {
   if (!photos.length) return;
   const target = photos.some((p) => !p.starred);
@@ -192,8 +192,7 @@ async function toggleStar(photos: Photo[]): Promise<void> {
   viewer.refreshStar();
   updateStatus();
   const paths = changed.map((p) => p.path);
-  const job = starChain.then(() => api.setStar(paths, target));
-  starChain = job.catch(() => {});
+  const job = store.queueStarWrite(() => api.setStar(paths, target));
   try {
     const r = await job;
     for (const [dir, n] of Object.entries(r.folders)) {
@@ -241,9 +240,14 @@ let switchSeq = 0;
 /** 切换工作目录：扫描它下面所有含照片的子文件夹（相册），打开上次看的或第一个相册。
  *  扫描期间旧目录照常可用（后端扫完才切换）；期间又选了别的目录，以最后一次为准。 */
 async function switchWorkdir(path: string): Promise<void> {
-  if (isExportOpen()) {
+  const dialog = $('export-dialog');
+  if (isExportOpen() && !dialog.querySelector('.help')) {
     toast('请先关闭导出对话框', 'warn');
     return;
+  }
+  if (dialog.querySelector('.help')) {
+    dialog.hidden = true;
+    dialog.innerHTML = '';
   }
   const seq = ++switchSeq;
   toast(`正在扫描 ${baseName(path)} …`);
@@ -252,21 +256,47 @@ async function switchWorkdir(path: string): Promise<void> {
   try {
     lib = await api.setWorkdir(path);
   } catch (e) {
-    if (seq !== switchSeq || String(e).includes('superseded')) return;
-    thumbsEl.textContent = '';
-    const missing = String(e).includes('不存在');
-    toast(missing ? `找不到 ${path}（移动硬盘没连接？）。可在工作目录菜单里把它从“最近”中移除。` : `无法打开：${e}`, 'error', 5000);
+    if (String(e).includes('superseded')) return; // 被后来的切换取代了
+    if (seq === switchSeq) {
+      thumbsEl.textContent = '';
+      const missing = String(e).includes('不存在');
+      toast(missing ? `找不到 ${path}（移动硬盘没连接？）。可在工作目录菜单里把它从“最近”中移除。` : `无法打开：${e}`, 'error', 5000);
+    }
+    // 这次失败了，但更早发出的一次切换可能已经在后台生效：以后台为准对齐界面
+    await syncWithBackend();
     return;
   }
-  if (seq !== switchSeq) return;
-  thumbsEl.textContent = '';
-  if (viewer.opened) viewer.close(); // 看图器里还是旧目录的照片
-  setLibrary(lib);
+  if (seq !== switchSeq) {
+    // 本次结果过时（用户又选了别的）；如果那次后来的切换失败了，后台停在本次的目录上，同样以后台为准
+    await syncWithBackend();
+    return;
+  }
+  applyWorkdir(lib);
   await openInitialView(lib);
   if (lib.folders.length) {
     const n = lib.folders.reduce((s, f) => s + f.count, 0);
     toast(`找到 ${lib.folders.length} 个相册，共 ${n} 张照片`);
   }
+}
+
+/** 后台当前的工作目录和界面显示的不一致时（切换请求交错、失败），把界面对齐到后台 */
+async function syncWithBackend(): Promise<void> {
+  const lib = await api.getLibrary().catch(() => null);
+  if (!lib) return;
+  if (lib.workdir !== store.library.workdir) {
+    applyWorkdir(lib);
+    await openInitialView(lib);
+  } else {
+    setLibrary(lib); // 至少刷新“未连接”状态
+  }
+}
+
+/** 界面切到一个新的工作目录：关掉还停留在旧目录照片上的看图器和（没在导出的）导出对话框 */
+function applyWorkdir(lib: Library): void {
+  thumbsEl.textContent = '';
+  if (viewer.opened) viewer.close();
+  if (isExportOpen()) closeExportDialog(); // 正在导出时它不会关，导出用的是开始时的照片列表，不受影响
+  setLibrary(lib);
 }
 
 /** 打开该工作目录上次看的相册；打不开（被删、改名、磁盘没插）就退到第一个相册，再不行显示空状态 */
@@ -285,7 +315,10 @@ function shortPath(p: string, max = 46): string {
   return p.length <= max ? p : `…${p.slice(p.length - max + 1)}`;
 }
 
-function showWorkdirMenu(x: number, y: number): void {
+async function showWorkdirMenu(x: number, y: number): Promise<void> {
+  // 打开菜单时现查一次：哪些目录现在连不上了（中途拔掉的移动硬盘）、哪些又接上了
+  const fresh = await api.getLibrary().catch(() => null);
+  if (fresh && fresh.workdir === store.library.workdir) setLibrary(fresh);
   const { workdir, recent, missing } = store.library;
   const others = recent.filter((r) => r !== workdir);
   const gone = new Set(missing);
@@ -329,7 +362,7 @@ async function rescan(): Promise<void> {
 const workdirBtn = $<HTMLButtonElement>('btn-workdir');
 workdirBtn.addEventListener('click', () => {
   const r = workdirBtn.getBoundingClientRect();
-  showWorkdirMenu(r.left, r.bottom + 4);
+  void showWorkdirMenu(r.left, r.bottom + 4);
 });
 $('btn-rescan').addEventListener('click', () => void rescan());
 $('btn-export').addEventListener('click', () => openExportDialog());

@@ -140,10 +140,11 @@ impl IniDoc {
     /// 几千张一起打星就是“几千 × 几千行”，要好几秒；这里先建一次“文件名 → 行号”索引，
     /// 已有的段从后往前改（前面的行号不受影响），新段统一追加到末尾。
     pub fn set_star_many(&mut self, files: &[String], starred: bool) -> bool {
-        let mut index: HashMap<String, usize> = HashMap::new();
+        // 同一个文件可能有好几个段（例如在 Windows 上改过文件名大小写）：取消时每个段都要清，否则永远“取消不掉”
+        let mut index: HashMap<String, Vec<usize>> = HashMap::new();
         for (i, l) in self.lines.iter().enumerate() {
             if let Some(sec) = section_of(l) {
-                index.entry(norm_name(sec)).or_insert(i);
+                index.entry(norm_name(sec)).or_default().push(i);
             }
         }
         let mut existing = Vec::new();
@@ -155,7 +156,8 @@ impl IniDoc {
                 continue;
             }
             match index.get(&key) {
-                Some(&i) => existing.push(i),
+                Some(all) if starred => existing.push(all[0]), // 加星：第一个段写上就够了
+                Some(all) => existing.extend(all),
                 None if starred => appended.push(f),
                 None => {}
             }
@@ -281,6 +283,14 @@ mod tests {
         assert!(d.set_star_many(&big, false));
         assert!(d.starred().is_empty());
         assert!(t.elapsed() < std::time::Duration::from_millis(500), "{:?}", t.elapsed());
+    }
+
+    #[test]
+    fn unstar_clears_duplicate_sections() {
+        let mut d = IniDoc::parse("[IMG_1.JPG]\nstar=yes\n[img_1.jpg]\nstar=yes\nrotate=rotate(1)\n");
+        assert!(d.set_star_many(&["IMG_1.JPG".into()], false));
+        assert!(d.starred().is_empty(), "{}", d.render());
+        assert_eq!(d.render(), "[img_1.jpg]\nrotate=rotate(1)\n");
     }
 
     #[test]

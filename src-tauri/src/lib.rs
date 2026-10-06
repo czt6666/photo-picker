@@ -13,7 +13,7 @@ mod pool;
 mod scan;
 mod stars;
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -98,8 +98,10 @@ pub struct AppState {
     scanning: AtomicBool,
     /// 工作目录“代数”：每次切换 +1。扫描开始时记下，结束时代数变了就说明用户已经换了目录，结果作废
     workdir_gen: AtomicU64,
-    /// 扫描进行期间被打过星的文件夹：扫描结果里这些文件夹的星标数可能已过时，写回前要重算
-    star_touched: Mutex<HashSet<String>>,
+    /// 星标写入的流水号，以及每个文件夹最后一次写星标时的流水号。扫描开始时记下当前流水号，
+    /// 写回结果时，凡是流水号比它新的文件夹都重算星标数——几次扫描同时进行也不会互相把新星标数盖掉
+    star_seq: AtomicU64,
+    star_stamp: Mutex<HashMap<String, u64>>,
     settings: Mutex<Settings>,
     folders: RwLock<Vec<Folder>>,
     scanned: AtomicBool,
@@ -128,7 +130,8 @@ impl AppState {
             library_cache_path,
             scanning: AtomicBool::new(false),
             workdir_gen: AtomicU64::new(0),
-            star_touched: Mutex::new(HashSet::new()),
+            star_seq: AtomicU64::new(0),
+            star_stamp: Mutex::new(HashMap::new()),
             settings: Mutex::new(settings),
             folders: RwLock::new(cached),
             scanned: AtomicBool::new(false),
@@ -147,15 +150,27 @@ impl AppState {
         fs::write(&self.settings_path, json).map_err(|e| e.to_string())
     }
 
+    /// 注意：会对“最近”里的每个目录做一次 stat（网络盘断线时可能很慢），只能在后台线程里调用，
+    /// 而且 stat 时不持有任何锁。
     fn library(&self) -> Library {
-        let s = self.settings.lock();
-        let missing = s.recent.iter().filter(|r| !Path::new(r).is_dir()).cloned().collect();
-        Library { workdir: s.workdir.clone(), recent: s.recent.clone(), missing, folders: self.folders.read().clone() }
+        let (workdir, recent) = {
+            let s = self.settings.lock();
+            (s.workdir.clone(), s.recent.clone())
+        };
+        let missing = recent.iter().filter(|r| Some(*r) != workdir.as_ref() && !Path::new(r).is_dir()).cloned().collect();
+        Library { workdir, recent, missing, folders: self.folders.read().clone() }
     }
 
     /// 扫描结束时把结果写回：只有在扫描期间工作目录没被切换过才写（在设置锁里判断并写入，原子完成）。
-    /// 扫描期间被打过星的文件夹，星标数重新算一遍，免得旧结果把新星标数盖掉。
-    fn commit_scan(&self, gen: u64, workdir: Option<String>, mut folders: Vec<Folder>, settings: Option<Settings>) -> Option<Library> {
+    /// `star_start` 是扫描开始时的星标流水号：此后写过星标的文件夹，星标数重新算一遍，免得旧结果把新星标数盖掉。
+    fn commit_scan(
+        &self,
+        gen: u64,
+        workdir: Option<String>,
+        mut folders: Vec<Folder>,
+        settings: Option<Settings>,
+        star_start: u64,
+    ) -> Option<Library> {
         let mut s = self.settings.lock();
         if self.workdir_gen.load(Ordering::SeqCst) != gen {
             return None;
@@ -170,12 +185,16 @@ impl AppState {
         if s.workdir != workdir {
             return None;
         }
-        let touched = std::mem::take(&mut *self.star_touched.lock());
-        for f in folders.iter_mut().filter(|f| touched.contains(&f.path)) {
+        // 拿着相册列表的写锁再重算：set_star 更新星标数也要拿这把锁，两者先后有序，谁也盖不掉谁
+        let mut current = self.folders.write();
+        let stamped: Vec<String> =
+            self.star_stamp.lock().iter().filter(|(_, &v)| v > star_start).map(|(k, _)| k.clone()).collect();
+        for f in folders.iter_mut().filter(|f| stamped.contains(&f.path)) {
             (f.count, f.starred) = scan::folder_counts(Path::new(&f.path), &self.stars);
         }
         self.images.set_roots(&s.roots());
-        *self.folders.write() = folders;
+        *current = folders;
+        drop(current);
         drop(s);
         self.scanned.store(true, Ordering::SeqCst);
         self.persist_folders();
@@ -186,9 +205,9 @@ impl AppState {
     fn rescan_all(&self) -> Option<Library> {
         let gen = self.workdir_gen.load(Ordering::SeqCst);
         let workdir = self.settings.lock().workdir.clone();
-        self.star_touched.lock().clear();
+        let star_start = self.star_seq.load(Ordering::SeqCst);
         let folders = workdir.as_deref().map(|w| scan::scan_root(Path::new(w), &self.stars)).unwrap_or_default();
-        self.commit_scan(gen, workdir, folders, None)
+        self.commit_scan(gen, workdir, folders, None, star_start)
     }
 
     fn persist_folders(&self) {
@@ -215,7 +234,7 @@ async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T, String> + Sen
 async fn get_library(app: AppHandle, state: AppStateRef<'_>) -> Result<Library, String> {
     let st = state.inner().clone();
     if st.scanned.load(Ordering::SeqCst) {
-        return Ok(st.library());
+        return blocking(move || Ok(st.library())).await;
     }
     let has_cache = !st.folders.read().is_empty();
     if !has_cache {
@@ -231,7 +250,7 @@ async fn get_library(app: AppHandle, state: AppStateRef<'_>) -> Result<Library, 
             }
         });
     }
-    Ok(st.library())
+    blocking(move || Ok(st.library())).await
 }
 
 #[tauri::command]
@@ -247,6 +266,9 @@ async fn rescan(state: AppStateRef<'_>) -> Result<Library, String> {
 #[tauri::command]
 async fn set_workdir(path: String, state: AppStateRef<'_>) -> Result<Library, String> {
     let st = state.inner().clone();
+    // 代数号必须按“请求到达的顺序”领，而且在任何磁盘操作之前：检查一个正在唤醒的移动硬盘可能卡好几秒，
+    // 若之后才领号，较早的请求反而会拿到更大的号、最后生效。
+    let gen = st.workdir_gen.fetch_add(1, Ordering::SeqCst) + 1;
     blocking(move || {
         let mut p = PathBuf::from(&path);
         // 拖进来的是照片文件：用它所在的文件夹
@@ -260,12 +282,11 @@ async fn set_workdir(path: String, state: AppStateRef<'_>) -> Result<Library, St
         if dir.is_empty() {
             return Err("请选择具体的照片文件夹，而不是整个磁盘".into());
         }
-        let gen = st.workdir_gen.fetch_add(1, Ordering::SeqCst) + 1;
-        st.star_touched.lock().clear();
+        let star_start = st.star_seq.load(Ordering::SeqCst);
         let folders = scan::scan_root(Path::new(&dir), &st.stars);
         let mut s = st.settings.lock().clone();
         s.use_workdir(dir.clone());
-        st.commit_scan(gen, Some(dir), folders, Some(s)).ok_or_else(|| SUPERSEDED.to_string())
+        st.commit_scan(gen, Some(dir), folders, Some(s), star_start).ok_or_else(|| SUPERSEDED.to_string())
     })
     .await
 }
@@ -354,16 +375,20 @@ async fn set_star(paths: Vec<String>, starred: bool, state: AppStateRef<'_>) -> 
                     }
                 }
             }
-            st.star_touched.lock().insert(dir.to_string_lossy().into_owned());
             if st.stars.set(&dir, &names, starred)? == StarLocation::Fallback {
                 res.fallback = true;
             }
-            let (count, starred_count) = scan::folder_counts(&dir, &st.stars);
             let key = dir.to_string_lossy().into_owned();
-            if let Some(f) = st.folders.write().iter_mut().find(|f| f.path == key) {
+            // 先盖流水号（写盘之后），再在相册列表写锁里按磁盘上的最新状态更新星标数（与 commit_scan 的顺序约定一致）
+            let stamp = st.star_seq.fetch_add(1, Ordering::SeqCst) + 1;
+            st.star_stamp.lock().insert(key.clone(), stamp);
+            let mut folders = st.folders.write();
+            let (count, starred_count) = scan::folder_counts(&dir, &st.stars);
+            if let Some(f) = folders.iter_mut().find(|f| f.path == key) {
                 f.count = count;
                 f.starred = starred_count;
             }
+            drop(folders);
             res.folders.insert(key, starred_count);
         }
         st.persist_folders();
@@ -633,12 +658,12 @@ mod tests {
         let gen_b = st.workdir_gen.fetch_add(1, Ordering::SeqCst) + 1;
         let mut sb = Settings::default();
         sb.use_workdir(b.to_string_lossy().into_owned());
-        let lib = st.commit_scan(gen_b, sb.workdir.clone(), scan::scan_root(&b, &st.stars), Some(sb)).unwrap();
+        let lib = st.commit_scan(gen_b, sb.workdir.clone(), scan::scan_root(&b, &st.stars), Some(sb), 0).unwrap();
         assert_eq!(lib.folders[0].name, "y");
         // A 的结果后到：作废，不覆盖 B，也不写进设置文件
         let mut sa = Settings::default();
         sa.use_workdir(a.to_string_lossy().into_owned());
-        assert!(st.commit_scan(gen_a, sa.workdir.clone(), folders_a, Some(sa)).is_none());
+        assert!(st.commit_scan(gen_a, sa.workdir.clone(), folders_a, Some(sa), 0).is_none());
         assert_eq!(st.library().workdir.as_deref(), Some(b.to_string_lossy().as_ref()));
         let saved = Settings::parse(fs::read(&st.settings_path).ok().as_deref());
         assert_eq!(saved.workdir.as_deref(), Some(b.to_string_lossy().as_ref()));
@@ -654,15 +679,20 @@ mod tests {
         let mut s = Settings::default();
         s.use_workdir(w.to_string_lossy().into_owned());
         let gen = st.workdir_gen.load(Ordering::SeqCst);
-        st.commit_scan(gen, s.workdir.clone(), scan::scan_root(&w, &st.stars), Some(s.clone())).unwrap();
-        // 后台重扫开始（读到 0 星）……
-        let stale = scan::scan_root(&w, &st.stars);
-        // ……扫描期间用户打了星
+        st.commit_scan(gen, s.workdir.clone(), scan::scan_root(&w, &st.stars), Some(s.clone()), 0).unwrap();
+        // 两次重扫同时开始（都读到 0 星）……
+        let start1 = st.star_seq.load(Ordering::SeqCst);
+        let stale1 = scan::scan_root(&w, &st.stars);
+        let start2 = st.star_seq.load(Ordering::SeqCst);
+        let stale2 = scan::scan_root(&w, &st.stars);
+        // ……扫描期间用户打了星（走和 set_star 一样的流水号登记）
         let album = w.join("album");
         st.stars.set(&album, &["1.jpg".into()], true).unwrap();
-        st.star_touched.lock().insert(album.to_string_lossy().into_owned());
-        let lib = st.commit_scan(gen, s.workdir.clone(), stale, None).unwrap();
-        assert_eq!(lib.folders[0].starred, 1, "扫描结果里过时的 0 星不能盖掉新打的星");
+        let stamp = st.star_seq.fetch_add(1, Ordering::SeqCst) + 1;
+        st.star_stamp.lock().insert(album.to_string_lossy().into_owned(), stamp);
+        // 两次扫描先后写回：第二次也不能用旧的 0 星把新星标数盖掉
+        assert_eq!(st.commit_scan(gen, s.workdir.clone(), stale1, None, start1).unwrap().folders[0].starred, 1);
+        assert_eq!(st.commit_scan(gen, s.workdir.clone(), stale2, None, start2).unwrap().folders[0].starred, 1);
     }
 
     #[test]
