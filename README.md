@@ -1,6 +1,6 @@
 # 选片 PhotoPicker
 
-仿 **Picasa 3** 的 macOS 选片工具。Picasa 停更多年、Mac 上早已装不了，这里把它最好用的那一套
+仿 **Picasa 3** 的选片工具，支持 **macOS 和 Windows**。Picasa 停更多年、Mac 上早已装不了，这里把它最好用的那一套
 “看图 → 打星 → 筛出星标 → 导出”重新做了一遍，并且把**滚轮翻图不卡**当成第一目标。
 
 | 相册网格（RAW+JPG 显示 CR3 角标） | 看大图（滚轮翻页 + 底部胶片条） |
@@ -15,7 +15,7 @@
 
 | 功能 | 说明 |
 |---|---|
-| 工作目录 | 选一个**工作目录**（⌘O，或把文件夹拖进窗口），自动扫描它下面所有含照片的子文件夹作为**相册**，侧栏像 Picasa 一样平铺；记住最近用过的工作目录，一键切换 |
+| 工作目录 | 选一个**工作目录**（⌘O / Ctrl+O，或把文件夹拖进窗口），自动扫描它下面所有含照片的子文件夹作为**相册**，侧栏像 Picasa 一样平铺；记住最近用过的工作目录，一键切换 |
 | 缩略图网格 | 上万张也流畅；滑块 / 触控板捏合调大小；单击、⌘ 点击、Shift 点击、Shift+方向键多选 |
 | 看大图 | 双击 / 回车进入；**滚轮一格一张**，触控板轻扫一张；底部胶片条；显示尺寸、拍摄时间、相机、光圈快门 ISO |
 | 放大查看 | 按 `1` 或双击切到 1:1 实际像素（看对焦），捏合 / ⌘+滚轮缩放，拖动平移 |
@@ -24,9 +24,9 @@
 | 筛选 | “仅显示星标”开关（`Shift+S`）；侧栏“已加星标的照片”汇总工作目录里所有相册的星标；按文件名搜索 |
 | 导出 | 星标 / 选中 / 全部星标 → 目标文件夹（可自动建子文件夹）；**原图复制**或**缩小导出**（保留 EXIF） |
 | Picasa 兼容 | 星标读写 Picasa 的 `.picasa.ini`，Windows 上 Picasa 打过的星直接能看到 |
-| 格式 | JPEG、PNG、WebP、GIF、BMP、TIFF；macOS 上还有 **HEIC / AVIF / 各家 RAW**（CR2/CR3/NEF/ARW/DNG/RAF/ORF/RW2…） |
+| 格式 | JPEG、PNG、WebP、GIF、BMP、TIFF；macOS 上还有 **HEIC / AVIF / 各家 RAW**（CR2/CR3/NEF/ARW/DNG/RAF/ORF/RW2…）。Windows 上 RAW 作为同名 JPG 的伴侣照样配对、打星、导出，只是不能单独预览 |
 
-快捷键在 App 里按 `?` 随时查看。
+快捷键在 App 里按 `?` 随时查看。文中的 `⌘` 在 Windows 上一律换成 `Ctrl`。
 
 ## 安装
 
@@ -40,6 +40,11 @@ App 没有经过苹果公证（要付费开发者账号），第一次打开会�
 - 在“应用程序”里**右键 → 打开 → 打开**（只需一次）；
 - 或者终端执行：`xattr -dr com.apple.quarantine /Applications/PhotoPicker.app`
 
+**Windows**：同一个 Actions 页面里下载 `PhotoPicker-Windows`，解压后运行 `PhotoPicker_x.y.z_x64-setup.exe`
+（装在当前用户目录，不需要管理员权限）。Windows 10/11 均可；界面用的是系统自带的 WebView2，
+Windows 11 和较新的 Windows 10 已经自带，没有的话安装程序会自动下载。
+安装包没有代码签名，SmartScreen 可能提示“Windows 已保护你的电脑”，点**更多信息 → 仍要运行**即可。
+
 ### 自己编译
 
 ```bash
@@ -49,9 +54,12 @@ npm run tauri dev          # 开发模式
 npm run tauri build        # 打包，产物在 src-tauri/target/release/bundle/
 ```
 
+Windows 上编译还需要装 **Visual Studio 生成工具**（勾选“使用 C++ 的桌面开发”），Rust 用默认的 MSVC 工具链。
+打包出来的是 `bundle/nsis/*-setup.exe`。
+
 ## 星标存在哪里？
 
-和 Picasa 3 完全一样：存在**照片所在文件夹**的隐藏文件 `.picasa.ini` 里。例如给 `IMG_0001.JPG` 加星后：
+和 Picasa 3 完全一样：存在**照片所在文件夹**的隐藏文件 `.picasa.ini` 里（Windows 上同样带“隐藏”属性，和 Picasa 写的一致）。例如给 `IMG_0001.JPG` 加星后：
 
 ```ini
 [IMG_0001.JPG]
@@ -152,9 +160,10 @@ macOS 上这一步交给系统的 ImageIO 框架，它在 Apple 芯片上还有�
 
 ### 8. 为什么选 Tauri（Rust + 系统 WebView）
 
-- 界面用系统自带的 WebKit（就是 Safari 的内核），安装包只有几 MB，内存占用远小于 Electron；
-  它原生支持 HEIC、能用 GPU 合成；
-- 重活（扫描、解码、缩放、导出）在 Rust 里多线程跑，调用 macOS ImageIO；
+- 界面用系统自带的 WebView（macOS 上是 WebKit，就是 Safari 的内核；Windows 上是 WebView2，即 Edge 的 Chromium 内核），
+  安装包只有几 MB，内存占用远小于 Electron；
+  macOS 的 WebKit 原生支持 HEIC，两边都能用 GPU 合成；
+- 重活（扫描、解码、缩放、导出）在 Rust 里多线程跑，macOS 上调用系统 ImageIO；
 - 图片字节不走 IPC（那要先转成 JSON/base64，又大又慢），而是通过自定义协议 `thumb://`、`photo://` 直接喂给 `<img>`。
 
 ## 导出
@@ -220,5 +229,6 @@ cd src-tauri && PP_BENCH_FILE=/path/to/big.jpg cargo test --release bench_render
 - [ ] 删除 / 移到“废片”文件夹
 - [ ] 无损旋转（写 Picasa 的 `rotate=` 字段）
 - [ ] 监听文件夹变化自动刷新（目前点工具栏的 ⟳ 重新扫描）
-- HEIC / RAW 只在 macOS 上支持（靠系统 ImageIO）；缩小导出时只有 JPEG 原图能保留 EXIF
-- 未经苹果公证，首次打开需右键 → 打开
+- HEIC / RAW 只在 macOS 上能预览（靠系统 ImageIO）；Windows 上只拍 RAW、没有同名 JPG 的文件夹目前看不到照片
+  （下一步：直接取 RAW 里内嵌的全尺寸 JPEG 预览，或调用 Windows 的 WIC 解码）；缩小导出时只有 JPEG 原图能保留 EXIF
+- 未经苹果公证，首次打开需右键 → 打开；Windows 安装包未签名，SmartScreen 会提示一次

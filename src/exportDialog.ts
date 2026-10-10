@@ -1,8 +1,9 @@
-// 导出对话框：选范围（星标/选中/全部星标）→ 选目标文件夹 → 原图复制或缩小导出 → 进度 → 在访达中显示。
+// 导出对话框：选范围（星标/选中/全部星标）→ 选目标文件夹 → 原图复制或缩小导出 → 进度 → 在访达 / 资源管理器中显示。
 
 import { listen } from '@tauri-apps/api/event';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { revealItemInDir } from '@tauri-apps/plugin-opener';
+import { REVEAL_LABEL } from './platform';
 import { api, rawTag } from './api';
 import { prefs, store } from './store';
 import type { ExportMode, Photo, Progress } from './types';
@@ -219,7 +220,7 @@ export function openExportDialog(): void {
       ptext.innerHTML = `${r.cancelled ? '已停止。' : '完成！'}导出了 <b>${r.exported}</b> 张${extra}${esc(failed)}<br><span class="path">${esc(r.dest)}</span>`;
       const reveal = document.createElement('button');
       reveal.className = 'btn';
-      reveal.textContent = '在访达中显示';
+      reveal.textContent = REVEAL_LABEL;
       reveal.onclick = () => void revealItemInDir(r.dest).catch(() => {});
       cancel.replaceWith(reveal);
       go.textContent = '完成';

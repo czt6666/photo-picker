@@ -12,6 +12,7 @@ import { prefs, store, type View } from './store';
 import type { Library, Photo, Progress } from './types';
 import { closeMenu, contextMenu, esc, toast } from './ui';
 import { formatBytes, Viewer } from './viewer';
+import { isBrowserShortcut, mod as modKey, MOD_NAME, REVEAL_LABEL } from './platform';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -52,7 +53,7 @@ const sidebar = new Sidebar($('sidebar'), {
   openStarred: () => void openStarred(),
   folderMenu(path, x, y) {
     contextMenu(x, y, [
-      { label: '在访达中显示', action: () => void revealItemInDir(path).catch(() => {}) },
+      { label: REVEAL_LABEL, action: () => void revealItemInDir(path).catch(() => {}) },
       { label: '重新扫描工作目录', action: () => void rescan() },
     ]);
   },
@@ -68,7 +69,7 @@ function setLibrary(lib: Library): void {
   sidebar.render();
   const wd = lib.workdir;
   workdirBtn.textContent = wd ? `📁 ${baseName(wd)} ▾` : '📁 选择工作目录…';
-  workdirBtn.title = wd ? `工作目录：${wd}\n点击切换（⌘O）` : '选择一个文件夹作为工作目录，扫描它下面的所有相册（⌘O）';
+  workdirBtn.title = wd ? `工作目录：${wd}\n点击切换（${modKey('O')}）` : `选择一个文件夹作为工作目录，扫描它下面的所有相册（${modKey('O')}）`;
 }
 
 let viewSeq = 0;
@@ -333,11 +334,11 @@ async function showWorkdirMenu(x: number, y: number): Promise<void> {
     if (lib) setLibrary(lib);
   };
   contextMenu(x, y, [
-    { label: '选择工作目录…', detail: '⌘O', action: () => void chooseWorkdir() },
+    { label: '选择工作目录…', detail: modKey('O'), action: () => void chooseWorkdir() },
     ...(workdir
       ? [
           { label: '重新扫描', action: () => void rescan() },
-          { label: '在访达中显示', action: () => void revealItemInDir(workdir).catch(() => {}) },
+          { label: REVEAL_LABEL, action: () => void revealItemInDir(workdir).catch(() => {}) },
         ]
       : []),
     ...(others.length ? [{ separator: true, label: '最近的工作目录', action: () => {} }] : []),
@@ -403,7 +404,7 @@ zoom.addEventListener('input', () => {
   prefs.set('thumbSize', Number(zoom.value));
 });
 
-// 触控板捏合（webview 里是带 ctrlKey 的滚轮事件）或 ⌘+滚轮：调整缩略图大小
+// 触控板捏合（webview 里是带 ctrlKey 的滚轮事件）或 ⌘/Ctrl+滚轮：调整缩略图大小
 let pinchAcc = 0;
 gridEl.addEventListener(
   'wheel',
@@ -425,20 +426,20 @@ gridEl.addEventListener(
 const HELP = [
   ['图库', ''],
   ['方向键 / Shift+方向键', '移动 / 连选'],
-  ['⌘ 点击、Shift 点击', '多选 / 范围选择'],
-  ['⌘A', '全选'],
+  [`${MOD_NAME} 点击、Shift 点击`, '多选 / 范围选择'],
+  [modKey('A'), '全选'],
   ['回车、双击', '看大图'],
-  ['空格（或 S、⌘8）', '加 / 取消星标（多选时：有未加星的就全部加星）'],
+  [`空格（或 S、${modKey('8')}）`, '加 / 取消星标（多选时：有未加星的就全部加星）'],
   ['Shift+S', '仅显示星标 开 / 关'],
-  ['⌘E', '导出'],
-  ['⌘F', '搜索文件名'],
-  ['⌘O', '选择 / 切换工作目录'],
-  ['捏合 / ⌘+滚轮', '缩略图大小'],
+  [modKey('E'), '导出'],
+  [modKey('F'), '搜索文件名'],
+  [modKey('O'), '选择 / 切换工作目录'],
+  [`捏合 / ${MOD_NAME}+滚轮`, '缩略图大小'],
   ['看大图', ''],
   ['滚轮、← →', '上一张 / 下一张'],
-  ['空格（或 S、⌘8）', '加 / 取消星标'],
+  [`空格（或 S、${modKey('8')}）`, '加 / 取消星标'],
   ['1、Z、双击', '适合窗口 ↔ 1:1 实际像素'],
-  ['捏合 / ⌘+滚轮', '缩放；放大后拖动或滚动可平移'],
+  [`捏合 / ${MOD_NAME}+滚轮`, '缩放；放大后拖动或滚动可平移'],
   ['F', '全屏'],
   ['Esc', '返回图库'],
 ];
@@ -470,7 +471,7 @@ gridEl.addEventListener('contextmenu', (e) => {
   contextMenu(e.clientX, e.clientY, [
     { label: '查看大图', action: () => openViewer(i) },
     { label: allStarred ? '取消星标' : '加星标', action: () => void toggleStar(targets) },
-    { label: '在访达中显示', action: () => void revealItemInDir(p.path).catch(() => {}) },
+    { label: REVEAL_LABEL, action: () => void revealItemInDir(p.path).catch(() => {}) },
     { label: '导出…', action: () => openExportDialog() },
   ]);
 });
@@ -510,6 +511,8 @@ void getCurrentWebview()
 // ---------------------------------------------------------------------------
 
 window.addEventListener('keydown', (e) => {
+  // 先拦下 WebView2 自带的浏览器快捷键（刷新、打印…），否则一按 F5 整个界面就重载了
+  if (isBrowserShortcut(e)) e.preventDefault();
   const mod = e.metaKey || e.ctrlKey;
   const k = e.key;
   // 菜单开着时按任何键都先关掉它（菜单里的“加星标/取消星标”文字是打开时算好的，按键改了状态就过时了）

@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "仿 Picasa 3 的 macOS 选片工具",
+  "description": "仿 Picasa 3 的选片工具（macOS / Windows）",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
