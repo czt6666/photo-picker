@@ -155,13 +155,27 @@ def run(d, env, export_dir):
     check("滚到底部，底部缩略图加载", ok)
     js(d, "document.getElementById('grid').scrollTop = 0")
 
-    # 仅显示星标
-    d.find_element(By.CSS_SELECTOR, ".toggle-ui").click()
-    ok = wait(lambda: "3 张" in d.find_element(By.ID, "status-count").text)
-    check("“仅显示星标”过滤后只剩 3 张", ok, d.find_element(By.ID, "status-count").text)
+    # Shift+S：跳到“已加星标的照片”，再按一次回到刚才的相册
+    ActionChains(d).key_down(Keys.SHIFT).send_keys("S").key_up(Keys.SHIFT).perform()
+    ok = wait(lambda: "3 张" in d.find_element(By.ID, "status-count").text and d.find_elements(By.CSS_SELECTOR, ".sb-starred.active"))
+    check("Shift+S 切到星标相册，只剩 3 张", ok, d.find_element(By.ID, "status-count").text)
     d.save_screenshot(str(SHOTS / "02-starred-only.png"))
-    d.find_element(By.CSS_SELECTOR, ".toggle-ui").click()
-    wait(lambda: "300 张" in d.find_element(By.ID, "status-count").text)
+    ActionChains(d).key_down(Keys.SHIFT).send_keys("S").key_up(Keys.SHIFT).perform()
+    ok = wait(lambda: "300 张" in d.find_element(By.ID, "status-count").text)
+    check("再按 Shift+S 回到原相册", ok, d.find_element(By.ID, "status-count").text)
+
+    # 拖动侧栏分隔条改宽度，顶栏工作目录区跟着变、两者一样宽
+    # 分隔条本身 0 宽（只靠伸出的透明区接鼠标），所以从侧栏中心往右偏到右边缘内 2px 处按下
+    sidebar = d.find_element(By.ID, "sidebar")
+    w0 = js(d, "return document.getElementById('sidebar').offsetWidth")
+    ActionChains(d).move_to_element_with_offset(sidebar, w0 // 2 - 2, 0).click_and_hold().move_by_offset(60, 0).release().perform()
+    w1 = js(d, "return document.getElementById('sidebar').offsetWidth")
+    tb = js(d, "return document.querySelector('.tb-side').offsetWidth")
+    check("拖动分隔条把侧栏拉宽，顶栏工作目录区同宽", w1 > w0 + 40 and tb == w1, f"{w0} → {w1}，顶栏 {tb}")
+    check("侧栏宽度记住了", js(d, "return localStorage.getItem('pp.sidebarWidth')") == str(w1))
+    ActionChains(d).move_to_element_with_offset(sidebar, w1 // 2 - 2, 0).double_click().perform()
+    w2 = js(d, "return document.getElementById('sidebar').offsetWidth")
+    check("双击分隔条恢复默认宽度", w2 == 250, str(w2))
 
     # 选中第 1 张，按空格加星；Shift+→ 连选，再按 S（S 也保留）
     first = wait(lambda: d.find_element(By.CSS_SELECTOR, '.cell[data-i="0"]'))

@@ -12,9 +12,8 @@ class Store {
   view: View = { kind: 'none' };
   /** 当前视图（文件夹 / 星标相册）的全部照片 */
   all: Photo[] = [];
-  /** 经过“仅星标”、搜索过滤后的照片，网格和看图器都基于它 */
+  /** 经过搜索过滤（星标相册里还要去掉取消了星标的）后的照片，网格和看图器都基于它 */
   visible: Photo[] = [];
-  starredOnly = false;
   query = '';
   selection = new Set<string>();
   /** Shift 连选的起点 */
@@ -64,7 +63,7 @@ class Store {
   refilter(keepSelection = true): void {
     const q = this.query.trim().toLowerCase();
     // 星标相册里取消了星标的照片也要消失
-    const onlyStar = this.starredOnly || this.view.kind === 'starred';
+    const onlyStar = this.view.kind === 'starred';
     const match = (p: Photo) => !q || p.name.toLowerCase().includes(q) || p.companions.some((c) => c.toLowerCase().includes(q));
     this.visible = this.all.filter((p) => (!onlyStar || p.starred) && match(p));
     if (keepSelection) {

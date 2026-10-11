@@ -10,6 +10,8 @@
   --star: #ffc531;
   --danger: #ff6b6b;
   --thumb: 160px;
+  --thumb-h: 128px;
+  --sidebar-w: 250px;
   color-scheme: dark;
   font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif;
   font-size: 13px;
@@ -120,10 +122,22 @@ kbd {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 12px;
+  padding: 0 12px 0 0;
+  min-height: 46px;
   background: var(--panel);
   border-bottom: 1px solid var(--border);
   flex: none;
+}
+/* 顶栏左边这一块和侧栏同宽、右边框对齐，看起来是侧栏往上延伸的一列 */
+.tb-side {
+  flex: none;
+  align-self: stretch;
+  width: var(--sidebar-w);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px 0 12px;
+  border-right: 1px solid var(--border);
 }
 .view-title {
   flex: 1;
@@ -141,28 +155,6 @@ kbd {
 .search {
   width: 180px;
 }
-.toggle {
-  display: inline-flex;
-  cursor: pointer;
-}
-.toggle input {
-  display: none;
-}
-.toggle-ui {
-  padding: 5px 11px;
-  border-radius: 6px;
-  border: 1px solid var(--border);
-  background: var(--panel-2);
-  white-space: nowrap;
-}
-.toggle input:checked + .toggle-ui {
-  background: rgba(255, 197, 49, 0.16);
-  border-color: rgba(255, 197, 49, 0.6);
-  color: var(--star);
-}
-.toggle input:disabled + .toggle-ui {
-  opacity: 0.4;
-}
 
 /* ---------- 主区域 ---------- */
 
@@ -173,12 +165,37 @@ kbd {
 }
 
 .sidebar {
-  width: 250px;
+  width: var(--sidebar-w);
   flex: none;
   overflow-y: auto;
   background: var(--panel);
   border-right: 1px solid var(--border);
   padding: 8px 0 16px;
+}
+/* 侧栏右边的拖动条：本身 0 宽不占地方，靠伸出去的 8px 透明区域接住鼠标 */
+.sb-resizer {
+  flex: none;
+  width: 0;
+  position: relative;
+  z-index: 5;
+}
+.sb-resizer::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -5px;
+  width: 8px;
+  cursor: col-resize;
+}
+.sb-resizer:hover::before,
+body.resizing .sb-resizer::before {
+  background: linear-gradient(to right, transparent 3px, var(--accent) 3px, var(--accent) 5px, transparent 5px);
+}
+/* 拖动中：整个窗口都显示左右箭头光标，也不会顺手选中文字 */
+body.resizing,
+body.resizing * {
+  cursor: col-resize !important;
 }
 .sb-head {
   padding: 14px 14px 4px;
@@ -291,8 +308,8 @@ kbd {
 }
 .thumb {
   display: block;
-  max-width: calc(var(--thumb) - 14px);
-  max-height: calc(var(--thumb) - 14px);
+  max-width: calc(var(--thumb) - 10px);
+  max-height: calc(var(--thumb-h) - 10px);
   border: 3px solid #f4f4f2;
   border-radius: 2px;
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.5);
@@ -806,7 +823,9 @@ body.drop-target .content::after {
   color: var(--text-dim);
 }
 .btn.workdir {
-  max-width: 260px;
+  flex: 1;
+  min-width: 0;
+  text-align: left;
   overflow: hidden;
   text-overflow: ellipsis;
 }

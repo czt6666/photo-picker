@@ -21,7 +21,7 @@
 | 放大查看 | 按 `1` 或双击切到 1:1 实际像素（看对焦），捏合 / ⌘+滚轮缩放，拖动平移 |
 | 星标 | **空格**加 / 取消（`S`、Picasa 的 `⌘8` 也行）；多选时“有没加星的就全部加星” |
 | RAW+JPG | 像 Lightroom 一样：同名的 `IMG_0001.JPG` + `IMG_0001.CR3` 合成**一张**，只预览 JPG（快），角标显示 `CR3`；打星时两个文件一起打，**导出时两个格式一起导出** |
-| 筛选 | “仅显示星标”开关（`Shift+S`）；侧栏“已加星标的照片”汇总工作目录里所有相册的星标；按文件名搜索 |
+| 筛选 | 侧栏“已加星标的照片”汇总工作目录里所有相册的星标（`Shift+S` 在它和刚才的相册之间切换）；按文件名搜索 |
 | 导出 | 星标 / 选中 / 全部星标 → 目标文件夹（可自动建子文件夹）；**原图复制**或**缩小导出**（保留 EXIF） |
 | Picasa 兼容 | 星标读写 Picasa 的 `.picasa.ini`，Windows 上 Picasa 打过的星直接能看到 |
 | 格式 | JPEG、PNG、WebP、GIF、BMP、TIFF；macOS 上还有 **HEIC / AVIF / 各家 RAW**（CR2/CR3/NEF/ARW/DNG/RAF/ORF/RW2…） |
@@ -48,6 +48,19 @@ npm install
 npm run tauri dev          # 开发模式
 npm run tauri build        # 打包，产物在 src-tauri/target/release/bundle/
 ```
+
+### 本地调试预览版
+
+不想等 CI 打包、想马上看到改动效果，用 `scripts/preview.sh`（`npm run preview` 也一样）。预览版叫 “PhotoPicker Preview”，设置和缩略图缓存跟正式版分开存，两个可以同时开。
+
+```bash
+npm run preview                     # 开发模式：改 src/ 下的前端代码，窗口里立刻刷新；改 Rust 会自动重编译重启
+npm run preview:app                 # 打一个调试版 .app 并打开（不热刷新，之后双击就能再开）
+scripts/preview.sh pr 1 2           # 把 PR #1、#2 合到最新 main 上一起试（在 .preview/ 里，不动当前代码）
+scripts/preview.sh branch 某分支名   # 同上，按分支名；以上都可以加 --app
+```
+
+第一次要编译 Rust，几分钟；之后只编译改动的部分，快很多。
 
 ## 星标存在哪里？
 
@@ -209,7 +222,7 @@ python3 tests/e2e/run_e2e.py /tmp/pp-e2e
 cd src-tauri && PP_BENCH_FILE=/path/to/big.jpg cargo test --release bench_render -- --ignored --nocapture
 ```
 
-端到端测试（47 项）覆盖：工作目录（切换、重启后记住、最近列表）、读取已有 Picasa 星标、虚拟化网格、仅显示星标、
+端到端测试（51 项）覆盖：工作目录（切换、重启后记住、最近列表）、读取已有 Picasa 星标、虚拟化网格、Shift+S 切换星标相册、拖动侧栏宽度、
 空格 / 多选打星并写回 `.picasa.ini`、RAW+JPG 合并显示与成对打星 / 导出、滚轮一格一张、预加载命中率、EXIF 竖拍转正、
 1:1 加载原图、星标相册、缩小导出保留 EXIF、原图导出字节一致、连点导出只导出一次、“未连接”目录置灰与清理、
 协议拒绝访问工作目录以外的文件。
