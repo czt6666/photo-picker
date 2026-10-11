@@ -366,8 +366,10 @@ struct SetStarResult {
 }
 
 #[tauri::command]
-async fn set_star(paths: Vec<String>, starred: bool, state: AppStateRef<'_>) -> Result<SetStarResult, String> {
+async fn set_star(paths: Vec<String>, starred: bool, rating: Option<u8>, state: AppStateRef<'_>) -> Result<SetStarResult, String> {
     let st = state.inner().clone();
+    // rating：1～5 星；不传就是普通的加星（1 星）/ 取消
+    let rating = if starred { rating.unwrap_or(1).clamp(1, picasa_ini::MAX_RATING) } else { 0 };
     blocking(move || {
         let mut by_dir: BTreeMap<PathBuf, Vec<String>> = BTreeMap::new();
         for p in &paths {
@@ -392,7 +394,7 @@ async fn set_star(paths: Vec<String>, starred: bool, state: AppStateRef<'_>) -> 
                     }
                 }
             }
-            if st.stars.set(&dir, &names, starred)? == StarLocation::Fallback {
+            if st.stars.set_rating(&dir, &names, rating)? == StarLocation::Fallback {
                 res.fallback = true;
             }
             let key = dir.to_string_lossy().into_owned();

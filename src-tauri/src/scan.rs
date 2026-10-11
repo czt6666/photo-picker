@@ -16,7 +16,7 @@ use walkdir::WalkDir;
 use crate::formats::{is_companion, is_jpeg, is_supported_ext};
 use crate::natural::natural_cmp;
 use crate::picasa_ini::norm_name;
-use crate::stars::{is_starred, StarStore};
+use crate::stars::{rating_of, StarStore};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Photo {
@@ -27,6 +27,8 @@ pub struct Photo {
     /// 修改时间（毫秒）。前端拿它拼进缩略图 URL，文件一改 URL 就变，缓存自然失效。
     pub mtime: i64,
     pub starred: bool,
+    /// 星级 0～5（0 = 没加星；Picasa 标的星是 1）
+    pub rating: u8,
     /// 同名的 RAW / .xmp 文件名（与主文件在同一文件夹）。为空表示单独一个文件。
     pub companions: Vec<String>,
 }
@@ -117,8 +119,13 @@ pub fn group_names<I: IntoIterator<Item = String>>(names: I) -> Vec<Group> {
 }
 
 impl Group {
-    pub fn is_starred(&self, set: &std::collections::HashSet<String>) -> bool {
-        is_starred(set, &self.primary) || self.companions.iter().any(|c| is_starred(set, c))
+    /// 这一组的星级：主文件和同名 RAW 里取最高的
+    pub fn rating(&self, map: &HashMap<String, u8>) -> u8 {
+        self.companions.iter().map(|c| rating_of(map, c)).fold(rating_of(map, &self.primary), u8::max)
+    }
+
+    pub fn is_starred(&self, map: &HashMap<String, u8>) -> bool {
+        self.rating(map) > 0
     }
 }
 
@@ -263,6 +270,7 @@ pub fn list_folder(dir: &Path, stars: &StarStore) -> std::io::Result<Vec<Photo>>
             let meta = metas.get(&g.primary)?;
             Some(Photo {
                 starred: g.is_starred(&starred_set),
+                rating: g.rating(&starred_set),
                 path: dir.join(&g.primary).to_string_lossy().into_owned(),
                 dir: dir_s.clone(),
                 size: meta.len(),

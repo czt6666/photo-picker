@@ -12,6 +12,7 @@
 
 import { rawTag, thumbUrl } from './api';
 import { GridLayout } from './gridLayout';
+import { starLabel } from './rating';
 import { store } from './store';
 import { esc } from './ui';
 import type { Photo } from './types';
@@ -324,7 +325,7 @@ export class Grid {
     const c = document.createElement('div');
     c.className = 'cell';
     c.innerHTML =
-      '<span class="frame"><img class="thumb" decoding="async" draggable="false" alt=""><button class="badge" tabindex="-1" title="星标（空格）">★</button><span class="raw-tag"></span></span>';
+      '<span class="frame"><img class="thumb" decoding="async" draggable="false" alt=""><button class="badge" tabindex="-1" title="星标（空格；1～5 = 星级）">★</button><span class="raw-tag"></span></span>';
     const img = c.querySelector('img')!;
     img.addEventListener('load', () => c.classList.add('loaded'));
     img.addEventListener('error', () => {
@@ -376,6 +377,11 @@ export class Grid {
     c.classList.toggle('selected', store.selection.has(p.path));
     c.classList.toggle('focused', store.focus === p.path);
     c.classList.toggle('starred', p.starred);
+    // 2 星以上角标里带数字（★3），角标变成胶囊形
+    c.classList.toggle('rated', p.rating > 1);
+    const label = starLabel(p.rating);
+    const badge = c.querySelector<HTMLElement>('.badge')!;
+    if (badge.textContent !== label) badge.textContent = label;
   }
 
   private recycle(c: HTMLElement): void {

@@ -282,9 +282,9 @@ def run(d, env, export_dir):
     d.save_screenshot(str(SHOTS / "04-rotated.png"))
 
     # 1:1 放大 → 换原图
-    ActionChains(d).send_keys("1").perform()
+    ActionChains(d).send_keys("z").perform()
     ok = wait(lambda: js(d, "const m = document.querySelector('.v-main'); return m && m.naturalWidth >= 4000"), timeout=30)
-    check("按 1 放大到 1:1 → 加载原图", ok, js(d, "const m = document.querySelector('.v-main'); return m && [m.naturalWidth, m.naturalHeight]"))
+    check("按 Z 放大到 1:1 → 加载原图", ok, js(d, "const m = document.querySelector('.v-main'); return m && [m.naturalWidth, m.naturalHeight]"))
     d.save_screenshot(str(SHOTS / "05-zoom.png"))
     ActionChains(d).send_keys("").perform()  # Esc → 回到适合窗口
 

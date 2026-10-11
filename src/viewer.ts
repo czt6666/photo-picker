@@ -28,6 +28,8 @@ const MAX_SCALE = 8;
 export interface ViewerCallbacks {
   close(lastPath: string | null): void;
   toggleStar(photos: Photo[]): Promise<void>;
+  /** 数字键 1～5：标成几星 */
+  rate(photos: Photo[], rating: number): Promise<void>;
 }
 
 interface Dims {
@@ -179,9 +181,10 @@ export class Viewer {
   refreshStar(): void {
     const p = this.current;
     if (!p) return;
-    this.starBtn.textContent = p.starred ? '★ 已加星标' : '☆ 星标';
+    this.starBtn.textContent = p.rating > 1 ? `★ ${p.rating} 星` : p.starred ? '★ 已加星标' : '☆ 星标';
     this.starBtn.classList.toggle('on', p.starred);
     this.starMark.hidden = !p.starred;
+    this.starMark.textContent = '★'.repeat(Math.max(1, p.rating));
     this.strip.refresh();
   }
 
@@ -227,6 +230,12 @@ export class Viewer {
         this.close();
         return true;
       case '1':
+      case '2':
+      case '3':
+      case '4':
+      case '5':
+        void this.toggleStar(Number(k));
+        return true;
       case 'z':
       case 'Z':
         this.toggleActualSize();
@@ -657,10 +666,11 @@ export class Viewer {
     this.stage.classList.remove('dragging');
   }
 
-  private async toggleStar(): Promise<void> {
+  /** 不带参数 = 加 / 取消星标；带 1～5 = 标成几星 */
+  private async toggleStar(rating?: number): Promise<void> {
     const p = this.current;
     if (!p) return;
-    await this.cb.toggleStar([p]);
+    await (rating ? this.cb.rate([p], rating) : this.cb.toggleStar([p]));
     this.refreshStar();
     this.starMark.classList.remove('pop');
     void this.starMark.offsetWidth; // 重启动画

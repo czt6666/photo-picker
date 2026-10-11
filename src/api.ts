@@ -10,7 +10,8 @@ export const api = {
   forgetWorkdir: (path: string) => invoke<Library>('forget_workdir', { path }),
   listFolder: (path: string) => invoke<Photo[]>('list_folder', { path }),
   listStarred: () => invoke<Photo[]>('list_starred'),
-  setStar: (paths: string[], starred: boolean) => invoke<SetStarResult>('set_star', { paths, starred }),
+  /** rating：0 = 取消星标，1～5 = 星级 */
+  setRating: (paths: string[], rating: number) => invoke<SetStarResult>('set_star', { paths, starred: rating > 0, rating }),
   photoInfo: (path: string) => invoke<PhotoInfo>('photo_info', { path }),
   prefetchThumbs: (paths: string[]) => invoke<void>('prefetch_thumbs', { paths }),
   exportPhotos: (request: ExportRequest) => invoke<ExportResult>('export_photos', { request }),
