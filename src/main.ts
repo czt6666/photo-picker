@@ -11,11 +11,14 @@ import { baseName, makeSidebarResizable, Sidebar } from './sidebar';
 import { planRate, planToggle } from './rating';
 import { isStarMode, prefs, store, type View } from './store';
 import type { Library, Photo, Progress } from './types';
+import { LANGS, lang, setLang, t, translateDom } from './i18n';
 import { closeMenu, contextMenu, esc, toast } from './ui';
 import { formatBytes, Viewer } from './viewer';
 import { isBrowserShortcut, isMac, mod as modKey, MOD_NAME, REVEAL_LABEL } from './platform';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
+
+translateDom(document);
 
 const gridEl = $('grid');
 const emptyEl = $('empty');
@@ -61,7 +64,7 @@ const sidebar = new Sidebar($('sidebar'), {
   folderMenu(path, x, y) {
     contextMenu(x, y, [
       { label: REVEAL_LABEL, action: () => void revealItemInDir(path).catch(() => {}) },
-      { label: '重新扫描工作目录', action: () => void rescan() },
+      { label: t('重新扫描'), action: () => void rescan() },
     ]);
   },
   workdirMenu: (x, y) => void showWorkdirMenu(x, y),
@@ -75,8 +78,8 @@ function setLibrary(lib: Library): void {
   store.setLibrary(lib);
   sidebar.render();
   const wd = lib.workdir;
-  workdirBtn.textContent = wd ? `📁 ${baseName(wd)} ▾` : '📁 选择工作目录…';
-  workdirBtn.title = wd ? `工作目录：${wd}\n点击切换（${modKey('O')}）` : `选择一个文件夹作为工作目录，扫描它下面的所有相册（${modKey('O')}）`;
+  workdirBtn.textContent = wd ? `📁 ${baseName(wd)} ▾` : t('📁 选择工作目录…');
+  workdirBtn.title = wd ? `${t('{path}\n点击切换', { path: wd })}（${modKey('O')}）` : `${t('选择照片文件夹')}（${modKey('O')}）`;
 }
 
 let viewSeq = 0;
@@ -91,7 +94,7 @@ async function showView(view: View, load: () => Promise<Photo[]>): Promise<boole
     photos = await load();
   } catch (e) {
     if (seq !== viewSeq) return true; // 用户已经去了别处，这次失败无所谓
-    toast(`读取失败：${e}`, 'error');
+    toast(t('读取失败：{e}', { e: String(e) }), 'error');
     return false;
   }
   if (seq !== viewSeq) return true; // 用户已经点了别的文件夹
@@ -195,10 +198,10 @@ function renderTitle(): void {
   const v = store.view;
   if (v.kind === 'folder') {
     const f = store.folder(v.path);
-    const tag = v.starredOnly ? ' <span class="star">★</span> <span class="dim">仅星标 ·</span>' : '';
+    const tag = v.starredOnly ? ` <span class="star">★</span> <span class="dim">${t('仅星标')} ·</span>` : '';
     titleEl.innerHTML = `<b>${esc(f?.name ?? v.path.split(/[\\/]/).pop() ?? '')}</b>${tag} <span class="dim">${esc(v.path)}</span>`;
   } else if (v.kind === 'starred') {
-    titleEl.innerHTML = '<b><span class="star">★</span> 已加星标的照片</b> <span class="dim">工作目录中的所有相册</span>';
+    titleEl.innerHTML = `<b><span class="star">★</span> ${t('已加星标的照片')}</b> <span class="dim">${t('所有相册')}</span>`;
   } else {
     titleEl.textContent = '';
   }
@@ -209,21 +212,22 @@ function renderEmpty(): void {
   if (!store.library.workdir) {
     html = `<div class="empty-card">
       <div class="big">📁</div>
-      <h2>先选择一个工作目录</h2>
-      <p class="dim">比如“图片”或某次拍摄的文件夹。它下面所有含照片的子文件夹都会作为相册列在左侧。<br>也可以直接把文件夹拖进这个窗口。</p>
-      <button class="btn primary" id="empty-add">选择工作目录…</button></div>`;
+      <h2>${t('选择一个照片文件夹')}</h2>
+      <p class="dim">${t('子文件夹会作为相册列在左侧，也可以把文件夹直接拖进来。')}</p>
+      <button class="btn primary" id="empty-add">${t('选择文件夹…')}</button></div>`;
   } else if (!store.library.folders.length) {
-    html = `<div class="empty-card"><h2>这个工作目录下没有找到照片</h2>
+    html = `<div class="empty-card"><h2>${t('这里没有找到照片')}</h2>
       <p class="dim">${esc(store.library.workdir)}</p>
-      <button class="btn primary" id="empty-add">换一个工作目录…</button></div>`;
+      <button class="btn primary" id="empty-add">${t('换一个文件夹…')}</button></div>`;
   } else if (store.view.kind === 'none') {
-    html = '<div class="empty-card"><p class="dim">从左侧选择一个相册</p></div>';
+    html = `<div class="empty-card"><p class="dim">${t('从左侧选择一个相册')}</p></div>`;
   } else if (!store.visible.length) {
-    if (store.view.kind === 'starred') html = '<div class="empty-card"><h2>还没有星标照片</h2><p class="dim">看照片时按 <kbd>空格</kbd> 加星标，工作目录里所有星标照片都会汇总到这里。</p></div>';
+    if (store.view.kind === 'starred')
+      html = `<div class="empty-card"><h2>${t('还没有星标')}</h2><p class="dim">${t('按 {key} 加星标', { key: `<kbd>${t('空格')}</kbd>` })}</p></div>`;
     else if (store.view.kind === 'folder' && store.view.starredOnly && !store.query)
-      html = '<div class="empty-card"><p class="dim">这个相册里没有星标照片了</p><p class="dim">再点一次左上的“已加星标的照片”（或按 <kbd>Shift</kbd>+<kbd>S</kbd>）取消星标筛选</p></div>';
-    else if (store.query) html = `<div class="empty-card"><p class="dim">没有文件名包含“${esc(store.query)}”的照片</p></div>`;
-    else html = '<div class="empty-card"><p class="dim">这个文件夹里没有照片</p></div>';
+      html = `<div class="empty-card"><h2>${t('这个相册没有星标照片')}</h2><p class="dim">${t('按 {key} 取消筛选', { key: '<kbd>Shift+S</kbd>' })}</p></div>`;
+    else if (store.query) html = `<div class="empty-card"><p class="dim">${t('没有匹配“{q}”的照片', { q: esc(store.query) })}</p></div>`;
+    else html = `<div class="empty-card"><p class="dim">${t('没有照片')}</p></div>`;
   }
   emptyEl.innerHTML = html;
   emptyEl.hidden = !html;
@@ -239,17 +243,17 @@ function updateStatus(): void {
   const total = shown.length;
   const starred = shown.filter((p) => p.starred).length;
   const sel = store.selection.size;
-  let s = store.view.kind === 'none' ? '' : `${total} 张照片`;
+  let s = store.view.kind === 'none' ? '' : t('{n} 张照片', { n: total });
   if (starred && !isStarMode(store.view)) s += `  ·  ★ ${starred}`;
   if (sel) {
     const bytes = store.selectedPhotos().reduce((n, p) => n + p.size, 0);
-    s += `  ·  已选 ${sel} 张（${formatBytes(bytes)}）`;
+    s += `  ·  ${t('已选 {n} 张（{size}）', { n: sel, size: formatBytes(bytes) })}`;
   }
   countEl.textContent = s;
   const targets = starTargets();
   starBtn.disabled = !targets.length;
   const allStarred = targets.length > 0 && targets.every((p) => p.starred);
-  starBtn.textContent = allStarred ? '★ 取消星标' : '☆ 加星标';
+  starBtn.textContent = allStarred ? t('★ 取消星标') : t('☆ 加星标');
   starBtn.classList.toggle('on', allStarred);
 }
 
@@ -282,7 +286,7 @@ async function toggleStar(photos: Photo[]): Promise<void> {
       if (f) f.starred = n;
     }
     sidebar.render();
-    if (r.fallback) toast('照片所在文件夹不可写，星标已保存在本机的 App 数据里', 'warn', 4000);
+    if (r.fallback) toast(t('文件夹不可写，星标已存到本机'), 'warn', 4000);
     // 星标筛选下取消星标：照片应当消失（看图器里先不动，回网格时再刷新）
     if (!target && !viewer.opened && isStarMode(store.view)) {
       store.refilter();
@@ -298,7 +302,7 @@ async function toggleStar(photos: Photo[]): Promise<void> {
     grid.refreshCells();
     viewer.refreshStar();
     updateStatus();
-    toast(`星标保存失败：${e}`, 'error', 4000);
+    toast(t('星标保存失败：{e}', { e: String(e) }), 'error', 4000);
   }
 }
 
@@ -314,14 +318,14 @@ async function rate(photos: Photo[], n: number): Promise<void> {
   // 和星标写同一个 .picasa.ini，排同一个队
   try {
     const fallback = await store.queueStarWrite(() => api.setRating(paths, rating));
-    if (fallback) toast('照片所在文件夹不可写，星级已保存在本机的 App 数据里', 'warn', 4000);
+    if (fallback) toast(t('文件夹不可写，星级已存到本机'), 'warn', 4000);
   } catch (e) {
     changed.forEach((p) => {
       if (p.rating === rating) p.rating = before.get(p) ?? 0;
     });
     grid.refreshCells();
     viewer.refreshStar();
-    toast(`星级保存失败：${e}`, 'error', 4000);
+    toast(t('星级保存失败：{e}', { e: String(e) }), 'error', 4000);
   }
 }
 
@@ -334,7 +338,7 @@ async function chooseWorkdir(): Promise<void> {
   const picked = await openDialog({
     directory: true,
     multiple: false,
-    title: '选择工作目录（会扫描它下面的所有相册）',
+    title: t('选择照片文件夹'),
     defaultPath: store.library.workdir ?? undefined,
   });
   if (typeof picked === 'string') await switchWorkdir(picked);
@@ -351,7 +355,7 @@ let applyEpoch = 0;
 async function switchWorkdir(path: string): Promise<void> {
   const dialog = $('export-dialog');
   if (isExportOpen() && !dialog.querySelector('.help')) {
-    toast('请先关闭导出对话框', 'warn');
+    toast(t('请先关闭导出对话框'), 'warn');
     return;
   }
   if (dialog.querySelector('.help')) {
@@ -359,8 +363,8 @@ async function switchWorkdir(path: string): Promise<void> {
     dialog.innerHTML = '';
   }
   const seq = ++switchSeq;
-  toast(`正在扫描 ${baseName(path)} …`);
-  thumbsEl.textContent = `正在扫描 ${baseName(path)} …`;
+  toast(t('正在扫描 {name}…', { name: baseName(path) }));
+  thumbsEl.textContent = t('正在扫描 {name}…', { name: baseName(path) });
   let lib: Library;
   try {
     lib = await api.setWorkdir(path);
@@ -370,7 +374,7 @@ async function switchWorkdir(path: string): Promise<void> {
     failedSeq = seq;
     thumbsEl.textContent = '';
     const missing = String(e).includes('不存在');
-    toast(missing ? `找不到 ${path}（移动硬盘没连接？）。可在工作目录菜单里把它从“最近”中移除。` : `无法打开：${e}`, 'error', 5000);
+    toast(missing ? t('找不到 {path}，移动硬盘没接上？', { path }) : t('打不开：{e}', { e: String(e) }), 'error', 5000);
     // 这次失败了，但更早发出的一次有效切换可能已经在后台生效：以后台为准对齐界面
     await syncWithBackend(seq);
     return;
@@ -381,7 +385,7 @@ async function switchWorkdir(path: string): Promise<void> {
   await openInitialView(lib);
   if (lib.folders.length) {
     const n = lib.folders.reduce((s, f) => s + f.count, 0);
-    toast(`找到 ${lib.folders.length} 个相册，共 ${n} 张照片`);
+    toast(t('{n} 个相册，{m} 张照片', { n: lib.folders.length, m: n }));
   }
 }
 
@@ -438,26 +442,26 @@ async function showWorkdirMenu(x: number, y: number): Promise<void> {
     if (lib) setLibrary(lib);
   };
   contextMenu(x, y, [
-    { label: '选择工作目录…', detail: modKey('O'), action: () => void chooseWorkdir() },
+    { label: t('选择文件夹…'), detail: modKey('O'), action: () => void chooseWorkdir() },
     ...(workdir
       ? [
-          { label: '重新扫描', action: () => void rescan() },
+          { label: t('重新扫描'), action: () => void rescan() },
           { label: REVEAL_LABEL, action: () => void revealItemInDir(workdir).catch(() => {}) },
         ]
       : []),
-    ...(others.length ? [{ separator: true, label: '最近的工作目录', action: () => {} }] : []),
+    ...(others.length ? [{ separator: true, label: t('最近'), action: () => {} }] : []),
     ...others.map((r) => ({
-      label: gone.has(r) ? `${baseName(r)}（未连接）` : baseName(r),
+      label: gone.has(r) ? t('{name}（未连接）', { name: baseName(r) }) : baseName(r),
       detail: shortPath(r),
       disabled: gone.has(r),
       action: () => void switchWorkdir(r),
     })),
-    ...(others.some((r) => gone.has(r)) ? [{ label: '从列表中移除未连接的目录', action: () => void forgetMissing() }] : []),
+    ...(others.some((r) => gone.has(r)) ? [{ label: t('移除未连接的'), action: () => void forgetMissing() }] : []),
   ]);
 }
 
 async function rescan(): Promise<void> {
-  toast('正在重新扫描工作目录…');
+  toast(t('正在扫描…'));
   setLibrary(await api.rescan());
   const v = store.view;
   if (v.kind === 'folder' && store.folder(v.path)) await openFolder(v.path, !!v.starredOnly);
@@ -536,41 +540,44 @@ gridEl.addEventListener(
   { passive: false },
 );
 
-const HELP = [
-  ['图库', ''],
-  ['方向键 / Shift+方向键', '移动 / 连选'],
-  [`${MOD_NAME} 点击、Shift 点击`, '多选 / 范围选择'],
-  [modKey('A'), '全选'],
-  ['回车、双击', '看大图'],
-  ['一直往下滚', '接着看下一个相册（中间有分界线）'],
-  [`空格（或 S、${modKey('8')}）`, '加 / 取消星标，相当于 Lightroom 的“选取”（多选时：有未加星的就全部加星）'],
-  ['1 ～ 5、0', '星级：标成 1～5 星（再按一次同样的数字，或按 0 = 清除）。和星标互不影响'],
-  ['Shift+S', '星标筛选开 / 关（同点侧栏“已加星标的照片”）'],
-  [modKey('E'), '导出'],
-  [modKey('F'), '搜索文件名'],
-  [modKey('O'), '选择 / 切换工作目录'],
-  [`捏合 / ${MOD_NAME}+滚轮`, '缩略图大小'],
-  ['看大图', ''],
-  ['滚轮、← →', '上一张 / 下一张'],
-  [`空格（或 S、${modKey('8')}）`, '加 / 取消星标'],
-  ['1 ～ 5、0', '星级：标成 1～5 星 / 清除'],
-  ['Z、双击', '适合窗口 ↔ 1:1 实际像素'],
-  [`捏合 / ${MOD_NAME}+滚轮`, `缩放；放大后拖动或 ${isMac ? '⌥' : 'Alt'}+滚动平移，翻页时保持放大倍数和位置`],
-  ['F', '全屏'],
-  ['Esc', '返回图库'],
+const HELP = (): string[][] => [
+  [t('图库'), ''],
+  [t('方向键'), t('移动；按住 Shift 连选')],
+  [t('{mod} / Shift 点击', { mod: MOD_NAME }), t('多选 / 连选')],
+  [modKey('A'), t('全选')],
+  [t('回车、双击'), t('看大图')],
+  [`${t('空格')} / S`, t('星标（选取）')],
+  [t('1～5、0'), t('星级；0 清除')],
+  ['Shift+S', t('星标筛选')],
+  [modKey('E'), t('导出')],
+  [modKey('F'), t('搜索文件名')],
+  [modKey('O'), t('选择 / 切换文件夹')],
+  [t('捏合、{mod}+滚轮', { mod: MOD_NAME }), t('缩略图大小')],
+  [t('看大图时'), ''],
+  [t('滚轮、← →'), t('上一张 / 下一张')],
+  [`${t('空格')} / S`, t('星标（选取）')],
+  [t('1～5、0'), t('星级；0 清除')],
+  [t('Z、双击'), t('1:1 / 适合窗口')],
+  [t('捏合、{mod}+滚轮', { mod: MOD_NAME }), t('缩放')],
+  [t('{alt}+滚动、拖动', { alt: isMac ? '⌥' : 'Alt' }), t('平移（翻页时保持）')],
+  ['F', t('全屏')],
+  ['Esc', t('返回')],
 ];
 
 function showHelp(): void {
   const el = $('export-dialog');
-  el.innerHTML = `<div class="modal-card help"><h2>快捷键</h2><table>${HELP.map(([k, v]) =>
+  const langs = LANGS.map((l) => `<option value="${l.id}" ${l.id === lang ? 'selected' : ''}>${l.label}</option>`).join('');
+  el.innerHTML = `<div class="modal-card help"><h2>${t('快捷键')}</h2><table>${HELP().map(([k, v]) =>
     v ? `<tr><td><kbd>${esc(k)}</kbd></td><td>${esc(v)}</td></tr>` : `<tr><th colspan="2">${esc(k)}</th></tr>`,
-  ).join('')}</table><div class="actions"><button class="btn primary">知道了</button></div></div>`;
+  ).join('')}</table><div class="actions"><label class="lang">${t('语言')} <select class="input">${langs}</select></label>
+    <span class="spacer"></span><button class="btn primary">${t('知道了')}</button></div></div>`;
   el.hidden = false;
   const close = () => {
     el.hidden = true;
     el.innerHTML = '';
   };
   el.querySelector('button')!.addEventListener('click', close);
+  el.querySelector('select')!.addEventListener('change', (e) => setLang((e.target as HTMLSelectElement).value as typeof lang));
   el.onclick = (e) => e.target === el && close();
 }
 $('btn-help').addEventListener('click', showHelp);
@@ -583,12 +590,12 @@ gridEl.addEventListener('contextmenu', (e) => {
   const p = store.visible[i];
   if (!store.selection.has(p.path)) grid.selectIndex(i, 'single');
   const targets = starTargets();
-  const allStarred = targets.every((t) => t.starred);
+  const allStarred = targets.every((x) => x.starred);
   contextMenu(e.clientX, e.clientY, [
-    { label: '查看大图', action: () => openViewer(i) },
-    { label: allStarred ? '取消星标' : '加星标', action: () => void toggleStar(targets) },
+    { label: t('查看大图'), action: () => openViewer(i) },
+    { label: allStarred ? t('取消星标') : t('加星标'), action: () => void toggleStar(targets) },
     { label: REVEAL_LABEL, action: () => void revealItemInDir(p.path).catch(() => {}) },
-    { label: '导出…', action: () => openExportDialog() },
+    { label: t('导出…'), action: () => openExportDialog() },
   ]);
 });
 
@@ -610,7 +617,7 @@ void listen<Library>('library-updated', (e) => {
 
 void listen<Progress>('thumb-progress', (e) => {
   const { done, total } = e.payload;
-  thumbsEl.textContent = total && done < total ? `正在生成缩略图 ${done} / ${total}` : '';
+  thumbsEl.textContent = total && done < total ? t('正在生成缩略图 {done} / {total}', { done, total }) : '';
 });
 
 // 把文件夹拖进窗口 = 添加到图库
@@ -689,12 +696,12 @@ window.addEventListener('keydown', (e) => {
 // ---------------------------------------------------------------------------
 
 async function boot(): Promise<void> {
-  titleEl.innerHTML = '<span class="dim">正在扫描工作目录…</span>';
+  titleEl.innerHTML = `<span class="dim">${t('正在扫描…')}</span>`;
   let lib: Library;
   try {
     lib = await api.getLibrary();
   } catch (e) {
-    toast(`读取工作目录失败：${e}`, 'error', 6000);
+    toast(t('读取工作目录失败：{e}', { e: String(e) }), 'error', 6000);
     return;
   }
   setLibrary(lib);

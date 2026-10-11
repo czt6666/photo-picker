@@ -3,6 +3,7 @@
 
 import { buildFolderList, type FolderRow } from './folderList';
 import { isStarMode, prefs, store } from './store';
+import { t } from './i18n';
 import { esc } from './ui';
 
 export interface SidebarCallbacks {
@@ -38,7 +39,7 @@ export class Sidebar {
     el.innerHTML = `
       <div class="sb-top"></div>
       <div class="sb-tools" hidden>
-        <input class="sb-filter" type="search" placeholder="筛选相册（如 2024 旅行）" autocomplete="off" spellcheck="false" />
+        <input class="sb-filter" type="search" placeholder="${t('筛选相册')}" autocomplete="off" spellcheck="false" />
         <button class="btn icon sb-foldall"></button>
       </div>
       <div class="sb-list"></div>`;
@@ -94,10 +95,10 @@ export class Sidebar {
     const { library, view } = store;
     const starOn = isStarMode(view);
     const starredTotal = store.totalStarred();
-    const hint = starOn ? '再点一次取消星标筛选（Shift+S）' : '只看星标照片，相册列表也只留有星标的（Shift+S）';
+    const hint = starOn ? t('关闭星标筛选（Shift+S）') : t('星标筛选（Shift+S）');
     let html = `
       <div class="sb-item sb-starred ${starOn ? 'on' : ''} ${view.kind === 'starred' ? 'active' : ''}" data-kind="starred" title="${hint}">
-        <span class="sb-name"><span class="star">★</span> 已加星标的照片</span>
+        <span class="sb-name"><span class="star">★</span> ${t('已加星标的照片')}</span>
         ${starOn ? '<span class="sb-off">✕</span>' : ''}
         <span class="count">${starredTotal || ''}</span>
       </div>`;
@@ -105,10 +106,10 @@ export class Sidebar {
     if (wd) {
       const photos = library.folders.reduce((n, f) => n + f.count, 0);
       html += `
-        <div class="sb-head">工作目录${starOn ? '<span class="sb-head-note">· 只列有星标的相册</span>' : ''}</div>
-        <div class="sb-workdir" title="${esc(wd)}（点击切换工作目录）">
+        <div class="sb-head">${t('工作目录')}${starOn ? `<span class="sb-head-note">${t('· 只列有星标的')}</span>` : ''}</div>
+        <div class="sb-workdir" title="${esc(t('{path}\n点击切换', { path: wd }))}">
           <span class="sb-name">📁 ${esc(baseName(wd))}</span>
-          <span class="count">${library.folders.length} 个相册 · ${photos} 张</span>
+          <span class="count">${t('{n} 个相册 · {m} 张', { n: library.folders.length, m: photos })}</span>
         </div>`;
     }
     this.top.innerHTML = html;
@@ -166,21 +167,21 @@ export class Sidebar {
     this.foldAll.hidden = !grouped || !!query.trim() || starOn;
     this.foldAll.dataset.action = anyOpen ? 'fold' : 'unfold';
     this.foldAll.textContent = anyOpen ? '⊟' : '⊞';
-    this.foldAll.title = anyOpen ? '全部折叠（⌥/Alt+点击分组也可以）' : '全部展开';
+    this.foldAll.title = anyOpen ? t('全部折叠') : t('全部展开');
 
     let html = '';
-    if (!library.folders.length) html = '<div class="sb-empty">（这个目录下没有找到照片）</div>';
-    else if (!matched) html = `<div class="sb-empty">${query.trim() ? `没有名字包含“${esc(query.trim())}”的相册` : '还没有带星标的相册'}</div>`;
+    if (!library.folders.length) html = `<div class="sb-empty">${t('没有照片')}</div>`;
+    else if (!matched) html = `<div class="sb-empty">${query.trim() ? t('没有匹配“{q}”的相册', { q: esc(query.trim()) }) : t('没有带星标的相册')}</div>`;
     for (const r of rows) {
       if (r.kind === 'group') {
         // 星标筛选下数字显示星标数，平时显示照片数
         const num = starOn ? '' : `<span class="count">${r.photos}</span>`;
         html += `
-          <div class="sb-group ${r.collapsed ? 'collapsed' : ''}" data-group="${esc(r.key)}" title="${r.albums} 个相册 · ${r.photos} 张（点击${r.collapsed ? '展开' : '折叠'}）">
+          <div class="sb-group ${r.collapsed ? 'collapsed' : ''}" data-group="${esc(r.key)}" title="${t('{n} 个相册 · {m} 张', { n: r.albums, m: r.photos })}">
             <span class="caret">${r.collapsed ? '▸' : '▾'}</span>
             <span class="sb-name">${esc(r.label)}</span>
             ${r.starred ? `<span class="sb-stars">★${r.starred}</span>` : ''}
-            ${r.collapsed ? `<span class="count">${r.albums} 个</span>` : num}
+            ${r.collapsed ? `<span class="count">${t('{n} 个', { n: r.albums })}</span>` : num}
           </div>`;
         continue;
       }

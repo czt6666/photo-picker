@@ -909,6 +909,12 @@ body.drop-target .content::after {
   justify-content: flex-end;
   gap: 10px;
 }
+.actions .lang {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-dim);
+}
 
 .menu {
   position: fixed;

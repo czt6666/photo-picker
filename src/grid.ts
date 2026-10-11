@@ -14,6 +14,7 @@ import { rawTag, thumbUrl } from './api';
 import { GridLayout } from './gridLayout';
 import { ratingStars } from './rating';
 import { store } from './store';
+import { t } from './i18n';
 import { esc } from './ui';
 import type { Photo } from './types';
 
@@ -305,7 +306,7 @@ export class Grid {
         el.className = 'sec-head';
         el.style.transform = `translateY(${b.top}px)`;
         el.style.height = `${b.head}px`;
-        el.innerHTML = `<span class="sec-name">${esc(this.cb.sectionName(b.dir))}</span><span class="sec-count">${b.count} 张</span>`;
+        el.innerHTML = `<span class="sec-name">${esc(this.cb.sectionName(b.dir))}</span><span class="sec-count">${t('{n} 张', { n: b.count })}</span>`;
         this.inner.appendChild(el);
         this.heads.set(k, el);
       }
@@ -325,7 +326,7 @@ export class Grid {
     const c = document.createElement('div');
     c.className = 'cell';
     c.innerHTML =
-      '<span class="frame"><img class="thumb" decoding="async" draggable="false" alt=""><button class="badge" tabindex="-1" title="星标（空格）">★</button><span class="raw-tag"></span><span class="rate" hidden></span></span>';
+      `<span class="frame"><img class="thumb" decoding="async" draggable="false" alt=""><button class="badge" tabindex="-1" title="${t('星标（空格）')}">★</button><span class="raw-tag"></span><span class="rate" hidden></span></span>`;
     const img = c.querySelector('img')!;
     img.addEventListener('load', () => c.classList.add('loaded'));
     img.addEventListener('error', () => {
@@ -342,7 +343,7 @@ export class Grid {
     c.style.visibility = '';
     c.dataset.i = String(i);
     const tag = rawTag(p);
-    c.title = p.companions.length ? `${p.name}\n同名文件：${p.companions.join('、')}` : p.name;
+    c.title = p.companions.length ? t('{name}\n同名文件：{files}', { name: p.name, files: p.companions.join(', ') }) : p.name;
     const tagEl = c.querySelector<HTMLElement>('.raw-tag')!;
     tagEl.textContent = tag;
     tagEl.hidden = !tag;
