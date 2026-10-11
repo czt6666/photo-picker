@@ -513,7 +513,7 @@ body.resizing * {
   margin: 8px 0;
 }
 body.drop-target .content::after {
-  content: '松开以添加文件夹';
+  content: attr(data-drop);
   position: absolute;
   inset: 12px;
   border: 2px dashed var(--accent);
@@ -1028,4 +1028,15 @@ body.drop-target .content::after {
 }
 ::-webkit-scrollbar-track {
   background: transparent;
+}
+
+/* 快捷键面板底部的语言选择 */
+.actions .lang {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-dim);
+}
+.actions .spacer {
+  flex: 1;
 }

@@ -12,6 +12,7 @@
 // 另外，按住方向键或猛滚滚轮“快速翻”时，中间路过的照片只显示缩略图、不加载清晰版
 // （停下 90ms 才加载），避免后端被一堆马上就会离开的请求塞满。
 
+import { t } from './i18n';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { api, needsTranscode, photoUrl, rawTag, thumbUrl } from './api';
 import { ImageLoader } from './loader';
@@ -188,7 +189,7 @@ export class Viewer {
   refreshStar(): void {
     const p = this.current;
     if (!p) return;
-    this.starBtn.textContent = p.starred ? '★ 已加星标' : '☆ 星标';
+    this.starBtn.textContent = t(p.starred ? 'v.starred' : 'v.star');
     this.starBtn.classList.toggle('on', p.starred);
     this.starMark.hidden = !p.starred;
     this.rateEl.querySelectorAll('button').forEach((b) => b.classList.toggle('on', Number(b.dataset.n) <= p.rating));
@@ -392,7 +393,7 @@ export class Viewer {
         if (tok !== this.token || String(err).includes('cancelled')) return;
         clearTimeout(this.slowTimer);
         this.stage.classList.remove('loading');
-        this.errorEl.textContent = '无法显示这张照片（格式不支持或文件已损坏）';
+        this.errorEl.textContent = t('v.error');
         this.errorEl.hidden = false;
       },
     );
