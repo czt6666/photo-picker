@@ -11,8 +11,11 @@ import { rawTag, thumbUrl } from './api';
 import { store } from './store';
 import type { Photo } from './types';
 
-const PAD = 14;
-const GAP = 10;
+const PAD = 10;
+const GAP = 4;
+/** 格子高 = 宽 × 0.8：大多数照片是横的（3:2、4:3），正方形格子上下会空出一大截；
+ *  矮一点的格子让行距和左右间距差不多，竖图只是稍微小一点 */
+const CELL_ASPECT = 0.8;
 const OVERSCAN_ROWS = 3;
 
 export interface GridCallbacks {
@@ -57,6 +60,10 @@ export class Grid {
     });
   }
 
+  private get cellH(): number {
+    return Math.round(this.size * CELL_ASPECT);
+  }
+
   get cellSize(): number {
     return this.size;
   }
@@ -66,6 +73,7 @@ export class Grid {
     const anchor = this.firstVisibleIndex();
     this.size = px;
     this.el.style.setProperty('--thumb', `${px}px`);
+    this.el.style.setProperty('--thumb-h', `${this.cellH}px`);
     this.relayout(anchor);
   }
 
@@ -192,7 +200,7 @@ export class Grid {
     const anchor = anchorIndex ?? this.firstVisibleIndex();
     this.cols = Math.max(1, Math.floor((width + GAP) / (this.size + GAP)));
     this.colW = width / this.cols;
-    this.rowH = this.size + GAP;
+    this.rowH = this.cellH + GAP;
     const rows = Math.ceil(store.visible.length / this.cols);
     this.inner.style.height = `${rows ? PAD * 2 + rows * this.rowH - GAP : 0}px`;
     // 布局变了，所有格子位置都要重算
@@ -253,7 +261,7 @@ export class Grid {
     const col = i % this.cols;
     c.style.transform = `translate(${PAD + col * this.colW}px, ${PAD + row * this.rowH}px)`;
     c.style.width = `${this.colW}px`;
-    c.style.height = `${this.size}px`;
+    c.style.height = `${this.cellH}px`;
     c.style.visibility = '';
     c.dataset.i = String(i);
     const tag = rawTag(p);

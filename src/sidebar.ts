@@ -1,6 +1,6 @@
 // 左侧栏：“已加星标的照片”虚拟相册 + 当前工作目录下的所有相册（Picasa 风格的扁平列表）。
 
-import { store } from './store';
+import { prefs, store } from './store';
 import type { Folder } from './types';
 import { esc } from './ui';
 
@@ -76,4 +76,55 @@ export class Sidebar {
     this.el.innerHTML = html;
     this.el.querySelector('.sb-item.active')?.scrollIntoView({ block: 'nearest' });
   }
+}
+
+// ---------------------------------------------------------------------------
+// 侧栏宽度：拖动分隔条调整，记在本地偏好里。
+// 宽度写成 #app 上的 CSS 变量 --sidebar-w，侧栏和顶栏左边的工作目录区都用它，所以两者永远一样宽。
+// ---------------------------------------------------------------------------
+
+const SIDEBAR_DEFAULT = 250;
+const SIDEBAR_MIN = 180;
+const SIDEBAR_MAX = 480;
+
+/** 夹在上下限之间；窗口很窄时最多占一半，给照片留地方 */
+function clampSidebar(w: number): number {
+  const max = Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, window.innerWidth / 2));
+  return Math.round(Math.max(SIDEBAR_MIN, Math.min(max, w)));
+}
+
+export function makeSidebarResizable(handle: HTMLElement): void {
+  const root = document.getElementById('app')!;
+  let width = clampSidebar(prefs.get('sidebarWidth', SIDEBAR_DEFAULT));
+  const apply = (w: number) => {
+    width = clampSidebar(w);
+    root.style.setProperty('--sidebar-w', `${width}px`);
+  };
+  apply(width);
+
+  handle.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    // 按下时记住“鼠标离侧栏右边缘多远”，拖动时保持这个偏移，分隔条不会一下跳到鼠标正下方
+    const offset = e.clientX - width;
+    handle.setPointerCapture(e.pointerId);
+    document.body.classList.add('resizing');
+    const move = (ev: PointerEvent) => apply(ev.clientX - offset);
+    const up = () => {
+      handle.removeEventListener('pointermove', move);
+      handle.removeEventListener('pointerup', up);
+      handle.removeEventListener('pointercancel', up);
+      document.body.classList.remove('resizing');
+      prefs.set('sidebarWidth', width);
+    };
+    handle.addEventListener('pointermove', move);
+    handle.addEventListener('pointerup', up);
+    handle.addEventListener('pointercancel', up);
+  });
+  handle.addEventListener('dblclick', () => {
+    apply(SIDEBAR_DEFAULT);
+    prefs.set('sidebarWidth', width);
+  });
+  // 窗口缩小时别让侧栏挤掉照片区（只是临时夹住，不改记住的宽度）
+  window.addEventListener('resize', () => apply(prefs.get('sidebarWidth', SIDEBAR_DEFAULT)));
 }
