@@ -125,6 +125,9 @@ def open_folder(d, name):
 
 def run(d, env, export_dir):
     d.set_window_size(1400, 900)
+    # 下面按中文界面文字判断；不管测试机的系统语言是什么，都固定用中文
+    js(d, "localStorage.setItem('pp.lang', '\"zh\"'); location.reload()")
+    time.sleep(1)
     # ---------- 图库 ----------
     # 启动后会自动打开第一个文件夹；等它稳定下来（侧栏会随视图切换重绘）
     wait(lambda: "张照片" in d.find_element(By.ID, "status-count").text, timeout=30)
@@ -163,6 +166,20 @@ def run(d, env, export_dir):
     ActionChains(d).key_down(Keys.SHIFT).send_keys("S").key_up(Keys.SHIFT).perform()
     ok = wait(lambda: "300 张" in d.find_element(By.ID, "status-count").text)
     check("再按 Shift+S 回到原相册", ok, d.find_element(By.ID, "status-count").text)
+
+    # 星标筛选：点“已加星标的照片”打开，侧栏只剩有星标的相册；点相册看它的星标照片；再点一次关掉
+    folder_rows = lambda: js(d, "return [...document.querySelectorAll('.sb-item[data-path]')].map(e => e.dataset.path.split('/').pop())")  # noqa: E731
+    d.find_element(By.CSS_SELECTOR, ".sb-starred").click()
+    ok = wait(lambda: "3 张" in d.find_element(By.ID, "status-count").text and folder_rows() == ["旅行"])
+    check("星标筛选打开：侧栏只列有星标的相册", ok, str(folder_rows()))
+    open_folder(d, "旅行")
+    ok = wait(lambda: "3 张" in d.find_element(By.ID, "status-count").text and "仅星标" in d.find_element(By.ID, "view-title").text
+              and d.find_elements(By.CSS_SELECTOR, ".sb-starred.on") and d.find_elements(By.CSS_SELECTOR, ".sb-item.active[data-path]"))
+    check("星标筛选下点相册：只看这个相册的星标照片", ok, d.find_element(By.ID, "view-title").text)
+    d.find_element(By.CSS_SELECTOR, ".sb-starred").click()
+    ok = wait(lambda: "300 张" in d.find_element(By.ID, "status-count").text and len(folder_rows()) == 3
+              and not d.find_elements(By.CSS_SELECTOR, ".sb-starred.on"))
+    check("再点一次“已加星标的照片”：取消筛选，留在当前相册", ok, f"{d.find_element(By.ID, 'status-count').text} {folder_rows()}")
 
     # 拖动侧栏分隔条改宽度，顶栏工作目录区跟着变、两者一样宽
     # 分隔条本身 0 宽（只靠伸出的透明区接鼠标），所以从侧栏中心往右偏到右边缘内 2px 处按下
@@ -268,9 +285,9 @@ def run(d, env, export_dir):
     d.save_screenshot(str(SHOTS / "04-rotated.png"))
 
     # 1:1 放大 → 换原图
-    ActionChains(d).send_keys("1").perform()
+    ActionChains(d).send_keys("z").perform()
     ok = wait(lambda: js(d, "const m = document.querySelector('.v-main'); return m && m.naturalWidth >= 4000"), timeout=30)
-    check("按 1 放大到 1:1 → 加载原图", ok, js(d, "const m = document.querySelector('.v-main'); return m && [m.naturalWidth, m.naturalHeight]"))
+    check("按 Z 放大到 1:1 → 加载原图", ok, js(d, "const m = document.querySelector('.v-main'); return m && [m.naturalWidth, m.naturalHeight]"))
     d.save_screenshot(str(SHOTS / "05-zoom.png"))
     ActionChains(d).send_keys("").perform()  # Esc → 回到适合窗口
 
@@ -299,23 +316,24 @@ def run(d, env, export_dir):
     d.save_screenshot(str(SHOTS / "08-export-dialog.png"))
     js(d, "document.querySelector('#export-dialog .dest').value = arguments[0]", str(export_dir))
     js(d, "document.querySelector('#export-dialog .sub').value = '精选'")
-    js(d, "document.querySelector('#export-dialog input[name=mode][value=resize]').checked = true")
-    js(d, "const s = document.querySelector('#export-dialog .maxpx'); s.value = '2048'")
     # 连点两下“导出”：只能导出一次，不能出现“导出失败”
     js(d, "const g = document.querySelector('#export-dialog .go'); g.click(); g.click();")
-    ok = wait(lambda: "完成" in d.find_element(By.CSS_SELECTOR, "#export-dialog .ptext").text, timeout=60)
+    ok = wait(lambda: "已导出" in d.find_element(By.CSS_SELECTOR, "#export-dialog .ptext").text, timeout=60)
     check("连点两下导出只导出一次", ok and "失败" not in d.find_element(By.CSS_SELECTOR, "#export-dialog .ptext").text,
           d.find_element(By.CSS_SELECTOR, "#export-dialog .ptext").text)
     out = sorted(p.name for p in (export_dir / "精选").glob("*")) if (export_dir / "精选").exists() else []
-    check("导出全部星标照片（缩小到 2048），同名 CR3 一起导出", out == ["DSC_10.jpg", "DSC_25.jpg", "IMG_0005.CR3", "IMG_0005.jpg"], str(out))
+    check("在星标汇总里导出全部星标照片（原样复制），同名 CR3 一起导出", out == ["DSC_10.jpg", "DSC_25.jpg", "IMG_0005.CR3", "IMG_0005.JPG"], str(out))
     if "IMG_0005.CR3" in out:
         check("RAW 原样复制（字节一致）", (export_dir / "精选" / "IMG_0005.CR3").read_bytes() == (PHOTOS / "大图" / "IMG_0005.CR3").read_bytes())
     done_text = d.find_element(By.CSS_SELECTOR, "#export-dialog .ptext").text
     check("导出完成提示里写明文件数", "3 张" in done_text and "4 个文件" in done_text, done_text)
     d.save_screenshot(str(SHOTS / "09-export-done.png"))
-    if out:
+    # 缩小导出界面上已经去掉，后端还支持：直接走后端命令测
+    invoke(d, "export_photos", {"request": {"paths": [str(PHOTOS / "大图" / "IMG_0005.jpg")], "dest": str(export_dir), "subfolder": "缩小",
+                                            "mode": "resize", "maxPx": 2048, "quality": 90, "includeCompanions": False}})
+    if (export_dir / "缩小" / "IMG_0005.jpg").exists():
         from PIL import Image
-        im = Image.open(export_dir / "精选" / "IMG_0005.jpg")
+        im = Image.open(export_dir / "缩小" / "IMG_0005.jpg")
         exif = im.getexif()
         check("缩小导出：竖图转正、长边 2048、EXIF 保留且方向重置为 1",
               im.size == (1365, 2048) and exif.get(0x0112) == 1 and exif.get(0x0110) == "Canon EOS R5", f"{im.size} {dict(exif)}")
@@ -379,7 +397,7 @@ def run(d, env, export_dir):
     items = wait(lambda: js(d, "return [...document.querySelectorAll('.menu button')].map(b => [b.innerText.replace(/\\s+/g, ' '), b.disabled])"))
     greyed = [t for t, dis in items or [] if "未连接" in t and dis]
     check("不存在的最近目录显示“未连接”且不可点", len(greyed) == 1 and "temp-workdir" in greyed[0], str(items))
-    js(d, "[...document.querySelectorAll('.menu button')].find(b => b.innerText.startsWith('从列表中移除')).click()")
+    js(d, "[...document.querySelectorAll('.menu button')].find(b => b.innerText.startsWith('移除未连接的')).click()")
     time.sleep(1)
     d.find_element(By.ID, "btn-workdir").click()
     items = wait(lambda: js(d, "return [...document.querySelectorAll('.menu button')].map(b => b.innerText)"))

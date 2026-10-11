@@ -12,6 +12,7 @@
 // 另外，按住方向键或猛滚滚轮“快速翻”时，中间路过的照片只显示缩略图、不加载清晰版
 // （停下 90ms 才加载），避免后端被一堆马上就会离开的请求塞满。
 
+import { t } from './i18n';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { api, needsTranscode, photoUrl, rawTag, thumbUrl } from './api';
 import { ImageLoader } from './loader';
@@ -28,6 +29,8 @@ const MAX_SCALE = 8;
 export interface ViewerCallbacks {
   close(lastPath: string | null): void;
   toggleStar(photos: Photo[]): Promise<void>;
+  /** 数字键：1～5 标成几星，0 清除 */
+  rate(photos: Photo[], rating: number): Promise<void>;
 }
 
 interface Dims {
@@ -88,6 +91,8 @@ export class Viewer {
   private starBtn: HTMLButtonElement;
   private zoomBtn: HTMLButtonElement;
   private starMark: HTMLElement;
+  /** 顶栏的五颗星：显示 / 点击设置星级 */
+  private rateEl: HTMLElement;
   private errorEl: HTMLElement;
 
   constructor(
@@ -108,6 +113,11 @@ export class Viewer {
 
     $('.v-back').addEventListener('click', () => this.close());
     this.starBtn.addEventListener('click', () => this.toggleStar());
+    this.rateEl = $('.v-rate');
+    this.rateEl.addEventListener('click', (e) => {
+      const n = Number((e.target as HTMLElement).closest<HTMLElement>('button')?.dataset.n);
+      if (n) void this.rate(n);
+    });
     this.zoomBtn.addEventListener('click', () => this.toggleActualSize());
     $('.v-full').addEventListener('click', () => this.toggleFullscreen());
 
@@ -179,9 +189,10 @@ export class Viewer {
   refreshStar(): void {
     const p = this.current;
     if (!p) return;
-    this.starBtn.textContent = p.starred ? '★ 已加星标' : '☆ 星标';
+    this.starBtn.textContent = p.starred ? t('★ 已加星标') : t('☆ 星标');
     this.starBtn.classList.toggle('on', p.starred);
     this.starMark.hidden = !p.starred;
+    this.rateEl.querySelectorAll('button').forEach((b) => b.classList.toggle('on', Number(b.dataset.n) <= p.rating));
     this.strip.refresh();
   }
 
@@ -226,13 +237,18 @@ export class Viewer {
       case 'Backspace':
         this.close();
         return true;
+      case '0':
       case '1':
+      case '2':
+      case '3':
+      case '4':
+      case '5':
+        // 星级：1～5 标成几星，0 清除
+        void this.rate(Number(k));
+        return true;
       case 'z':
       case 'Z':
         this.toggleActualSize();
-        return true;
-      case '0':
-        this.fit();
         return true;
       case '=':
       case '+':
@@ -377,7 +393,7 @@ export class Viewer {
         if (tok !== this.token || String(err).includes('cancelled')) return;
         clearTimeout(this.slowTimer);
         this.stage.classList.remove('loading');
-        this.errorEl.textContent = '无法显示这张照片（格式不支持或文件已损坏）';
+        this.errorEl.textContent = t('无法显示这张照片');
         this.errorEl.hidden = false;
       },
     );
@@ -655,6 +671,13 @@ export class Viewer {
   private onPointerUp(): void {
     this.drag = null;
     this.stage.classList.remove('dragging');
+  }
+
+  private async rate(n: number): Promise<void> {
+    const p = this.current;
+    if (!p) return;
+    await this.cb.rate([p], n);
+    this.refreshStar();
   }
 
   private async toggleStar(): Promise<void> {

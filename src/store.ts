@@ -1,8 +1,18 @@
 // 全局状态 + 极简的事件订阅。不用框架：几千张缩略图的场景下，手写的增量 DOM 更新最快、最可控。
 
+import { splitSections, type Section } from './gridLayout';
 import type { Folder, Library, Photo } from './types';
 
-export type View = { kind: 'folder'; path: string } | { kind: 'starred' } | { kind: 'none' };
+/**
+ * folder 视图的 path = 现在正在看的相册。连续翻动时列表里可能接着好几个相册，
+ * 往下滚到哪个相册，path 就跟着变成哪个。
+ * folder 视图带 starredOnly = 星标筛选开着时打开的相册，只显示其中的星标照片；
+ * starred = 星标筛选开着、还没挑具体相册时的汇总（所有相册的星标照片）。
+ */
+export type View = { kind: 'folder'; path: string; starredOnly?: boolean } | { kind: 'starred' } | { kind: 'none' };
+
+/** 星标筛选是否开着（侧栏“已加星标的照片”处于按下状态） */
+export const isStarMode = (v: View): boolean => v.kind === 'starred' || (v.kind === 'folder' && !!v.starredOnly);
 
 type Topic = 'library' | 'photos' | 'selection' | 'stars' | 'view';
 type Listener = () => void;
@@ -10,10 +20,12 @@ type Listener = () => void;
 class Store {
   library: Library = { workdir: null, recent: [], missing: [], folders: [] };
   view: View = { kind: 'none' };
-  /** 当前视图（文件夹 / 星标相册）的全部照片 */
+  /** 当前视图的全部照片：打开的相册，加上连续翻动时接在后面的相册（星标汇总则是所有星标照片） */
   all: Photo[] = [];
-  /** 经过搜索过滤（星标相册里还要去掉取消了星标的）后的照片，网格和看图器都基于它 */
+  /** 经过搜索过滤（星标筛选下还要去掉没星标的）后的照片，网格和看图器都基于它 */
   visible: Photo[] = [];
+  /** visible 按相册切成的段 */
+  sections: Section[] = [];
   query = '';
   selection = new Set<string>();
   /** Shift 连选的起点 */
@@ -59,13 +71,20 @@ class Store {
     this.emit('view');
   }
 
+  /** 连续翻动：把下一个相册的照片接在后面，选择和光标不变 */
+  appendPhotos(photos: Photo[]): void {
+    this.all = this.all.concat(photos);
+    this.refilter();
+  }
+
   /** 重新计算可见列表。keepSelection=false 时清空选择。 */
   refilter(keepSelection = true): void {
     const q = this.query.trim().toLowerCase();
-    // 星标相册里取消了星标的照片也要消失
-    const onlyStar = this.view.kind === 'starred';
+    // 星标筛选下，取消了星标的照片也要消失
+    const onlyStar = isStarMode(this.view);
     const match = (p: Photo) => !q || p.name.toLowerCase().includes(q) || p.companions.some((c) => c.toLowerCase().includes(q));
     this.visible = this.all.filter((p) => (!onlyStar || p.starred) && match(p));
+    this.sections = splitSections(this.visible);
     if (keepSelection) {
       const vis = new Set(this.visible.map((p) => p.path));
       for (const s of [...this.selection]) if (!vis.has(s)) this.selection.delete(s);

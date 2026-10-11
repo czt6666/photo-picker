@@ -365,6 +365,42 @@ struct SetStarResult {
     folders: BTreeMap<String, usize>,
 }
 
+/// 星级（1～5 星，0 = 清除）。和星标是两回事：只写 `rating=`，不动星标，也不影响相册的星标数。
+/// 返回值：是否有文件夹不可写、存到了 App 数据目录。
+#[tauri::command]
+async fn set_rating(paths: Vec<String>, rating: u8, state: AppStateRef<'_>) -> Result<bool, String> {
+    let st = state.inner().clone();
+    let rating = rating.min(picasa_ini::MAX_RATING);
+    blocking(move || {
+        let mut by_dir: BTreeMap<PathBuf, Vec<String>> = BTreeMap::new();
+        for p in &paths {
+            let p = Path::new(p);
+            if !st.images.allowed(p) {
+                return Err(format!("不在图库中：{}", p.display()));
+            }
+            if let (Some(dir), Some(name)) = (p.parent(), p.file_name()) {
+                by_dir.entry(dir.to_path_buf()).or_default().push(name.to_string_lossy().into_owned());
+            }
+        }
+        let mut fallback = false;
+        for (dir, primaries) in by_dir {
+            // RAW+JPG：同名的 RAW 跟着一起标（xmp 不是图片，只在清除时顺带清）
+            let map = scan::companion_map(&dir);
+            let mut names = primaries.clone();
+            for n in &primaries {
+                for c in map.get(n).into_iter().flatten() {
+                    if rating == 0 || !c.to_ascii_lowercase().ends_with(".xmp") {
+                        names.push(c.clone());
+                    }
+                }
+            }
+            fallback |= st.stars.set_rating(&dir, &names, rating)? == StarLocation::Fallback;
+        }
+        Ok(fallback)
+    })
+    .await
+}
+
 #[tauri::command]
 async fn set_star(paths: Vec<String>, starred: bool, state: AppStateRef<'_>) -> Result<SetStarResult, String> {
     let st = state.inner().clone();
@@ -599,6 +635,7 @@ pub fn run() {
             list_folder,
             list_starred,
             set_star,
+            set_rating,
             photo_info,
             prefetch_thumbs,
             export_photos,

@@ -4,7 +4,7 @@
 //! 兜底：文件夹不可写（只读 U 盘、网络盘、无权限）时，写到 App 自己的数据目录，
 //! 文件名是文件夹路径的哈希，格式同样是 picasa.ini。读取时两边取并集。
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -25,6 +25,41 @@ pub enum StarLocation {
     Fallback,
 }
 
+/// 一次写入改什么：星标（Lightroom 的“选取”）和星级（1～5 星）是两回事，各改各的。
+#[derive(Debug, Clone, Copy)]
+enum Edit {
+    Star(bool),
+    /// 0 = 清除
+    Rating(u8),
+}
+
+impl Edit {
+    fn clears(self) -> bool {
+        matches!(self, Edit::Star(false) | Edit::Rating(0))
+    }
+
+    fn cleared(self) -> Edit {
+        match self {
+            Edit::Star(_) => Edit::Star(false),
+            Edit::Rating(_) => Edit::Rating(0),
+        }
+    }
+
+    fn apply(self, doc: &mut IniDoc, names: &[String]) -> bool {
+        match self {
+            Edit::Star(on) => doc.set_star_many(names, on),
+            Edit::Rating(r) => doc.set_rating_many(names, r),
+        }
+    }
+}
+
+/// 一个文件夹里的标记：加星的文件名，和文件名 → 星级（都是规范化后的名字，见 [`norm_name`]）。
+#[derive(Debug, Default)]
+pub struct Marks {
+    pub starred: HashSet<String>,
+    pub ratings: HashMap<String, u8>,
+}
+
 pub struct StarStore {
     fallback_dir: PathBuf,
     /// 同一进程内串行化写操作，避免两次快速点击交错写坏文件
@@ -43,53 +78,73 @@ impl StarStore {
 
     /// 某文件夹下所有加星文件名（规范化后的，见 [`norm_name`]）。
     pub fn load(&self, folder: &Path) -> HashSet<String> {
-        let mut set = HashSet::new();
+        self.load_marks(folder).starred
+    }
+
+    /// 某文件夹下的星标和星级。
+    pub fn load_marks(&self, folder: &Path) -> Marks {
+        let mut marks = Marks::default();
         for p in [folder.join(INI_NAME), self.fallback_path(folder)] {
             if let Ok(text) = fs::read(&p) {
-                set.extend(IniDoc::parse(&String::from_utf8_lossy(&text)).starred());
+                let doc = IniDoc::parse(&String::from_utf8_lossy(&text));
+                marks.starred.extend(doc.starred());
+                for (name, r) in doc.ratings() {
+                    let e = marks.ratings.entry(name).or_insert(0);
+                    *e = (*e).max(r);
+                }
             }
         }
-        set
+        marks
     }
 
     /// 给同一文件夹里的一批文件设置星标。
     pub fn set(&self, folder: &Path, names: &[String], starred: bool) -> Result<StarLocation, String> {
+        self.write(folder, names, Edit::Star(starred))
+    }
+
+    /// 给同一文件夹里的一批文件设置星级：0 = 清除，1～5 = 星级。不动星标。
+    pub fn set_rating(&self, folder: &Path, names: &[String], rating: u8) -> Result<StarLocation, String> {
+        self.write(folder, names, Edit::Rating(rating))
+    }
+
+    fn write(&self, folder: &Path, names: &[String], edit: Edit) -> Result<StarLocation, String> {
         let _guard = self.write_lock.lock();
         let primary = folder.join(INI_NAME);
         let fallback = self.fallback_path(folder);
 
-        let primary_result = edit_ini(&primary, names, starred, None);
+        let primary_result = edit_ini(&primary, names, edit, None);
         let location = match primary_result {
             Ok(()) => StarLocation::Folder,
             Err(e) => {
                 log_warn(&format!("写 {} 失败（{e}），改存到 App 数据目录", primary.display()));
                 fs::create_dir_all(&self.fallback_dir).map_err(|e| e.to_string())?;
                 let header = format!("; 星标备份：文件夹不可写时由选片 App 保存\n; folder={}", folder.display());
-                edit_ini(&fallback, names, starred, Some(&header)).map_err(|e| e.to_string())?;
+                edit_ini(&fallback, names, edit, Some(&header)).map_err(|e| e.to_string())?;
                 return Ok(StarLocation::Fallback);
             }
         };
         // 取消星标时，兜底文件里的旧记录也要清掉，否则读的时候并集又把它“救活”了
-        if !starred && fallback.exists() {
-            let _ = edit_ini(&fallback, names, false, None);
+        // 星级同理：读的时候两边取最高的，兜底文件里留着旧的更高星级就降不下来了，所以每次都清
+        if (edit.clears() || matches!(edit, Edit::Rating(_))) && fallback.exists() {
+            let _ = edit_ini(&fallback, names, edit.cleared(), None);
         }
         Ok(location)
     }
 }
 
 /// 读-改-写一个 ini 文件；没有变化就不写盘。写入用“临时文件 + 原子改名”，断电也不会写出半个文件。
-fn edit_ini(path: &Path, names: &[String], starred: bool, header: Option<&str>) -> io::Result<()> {
+fn edit_ini(path: &Path, names: &[String], edit: Edit, header: Option<&str>) -> io::Result<()> {
     let mut doc = match fs::read(path) {
         Ok(b) => IniDoc::parse(&String::from_utf8_lossy(&b)),
         Err(e) if e.kind() == io::ErrorKind::NotFound => {
-            if !starred {
+            if edit.clears() {
                 return Ok(());
             }
             IniDoc::parse(header.map(|h| format!("{h}\n")).as_deref().unwrap_or(""))
         }
         Err(e) => return Err(e),
     };
-    if !doc.set_star_many(names, starred) {
+    if !edit.apply(&mut doc, names) {
         return Ok(());
     }
     let tmp = path.with_extension(format!("ini.tmp{}", std::process::id()));
@@ -143,6 +198,14 @@ pub fn is_starred(set: &HashSet<String>, file_name: &str) -> bool {
     !set.is_empty() && set.contains(&norm_name(file_name))
 }
 
+/// 便捷函数：某文件名的星级（没有是 0）。
+pub fn rating_of(map: &HashMap<String, u8>, file_name: &str) -> u8 {
+    if map.is_empty() {
+        return 0;
+    }
+    map.get(&norm_name(file_name)).copied().unwrap_or(0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -186,6 +249,27 @@ mod tests {
         assert_eq!(store.set(photos.path(), &names(&["b.jpg"]), true).unwrap(), StarLocation::Folder);
         assert!(hidden());
         assert_eq!(store.load(photos.path()).len(), 2);
+    }
+
+    #[test]
+    fn rating_and_star_are_stored_separately() {
+        let photos = tempfile::tempdir().unwrap();
+        let app = tempfile::tempdir().unwrap();
+        let store = StarStore::new(app.path().join("stars"));
+        store.set_rating(photos.path(), &names(&["a.jpg", "b.jpg"]), 5).unwrap();
+        store.set_rating(photos.path(), &names(&["b.jpg"]), 2).unwrap();
+        store.set(photos.path(), &names(&["c.jpg"]), true).unwrap();
+        let m = store.load_marks(photos.path());
+        assert_eq!((rating_of(&m.ratings, "A.JPG"), rating_of(&m.ratings, "b.jpg"), rating_of(&m.ratings, "c.jpg")), (5, 2, 0));
+        // 标了星级不等于加了星标
+        assert!(!is_starred(&m.starred, "a.jpg") && is_starred(&m.starred, "c.jpg"));
+        assert_eq!(fs::read_to_string(photos.path().join(INI_NAME)).unwrap(), "[a.jpg]\nrating=5\n[b.jpg]\nrating=2\n[c.jpg]\nstar=yes\n");
+        // 加 / 取消星标不动星级
+        store.set(photos.path(), &names(&["a.jpg"]), true).unwrap();
+        store.set(photos.path(), &names(&["a.jpg"]), false).unwrap();
+        assert_eq!(rating_of(&store.load_marks(photos.path()).ratings, "a.jpg"), 5);
+        store.set_rating(photos.path(), &names(&["a.jpg"]), 0).unwrap();
+        assert_eq!(rating_of(&store.load_marks(photos.path()).ratings, "a.jpg"), 0);
     }
 
     #[test]

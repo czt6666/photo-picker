@@ -13,7 +13,10 @@
 //! 我们沿用同一格式，好处是：在 Windows 上用 Picasa 标过的星，拷到 Mac 上直接能看到；
 //! 文件夹整体移动/拷贝，星标跟着走。
 //!
-//! 实现上把文件当成“行数组”编辑，只改 `star=` 这一行（或增删整个空段），
+//! 星级（1～5 星，相当于 Lightroom 的星级）是我们自己加的，和星标（相当于 Lightroom 的“选取”）互不相干：
+//! 在同一段里另写一行 `rating=N`。Picasa 不认识这个键，会原样留着；有星级没星标的照片就只有 `rating=` 一行。
+//!
+//! 实现上把文件当成“行数组”编辑，只改 `star=` / `rating=` 这一行（或增删整个空段），
 //! 其它内容（人脸、旋转、相册信息等 Picasa 写的东西）原样保留，换行风格（CRLF/LF）也保持不变。
 
 use std::collections::{HashMap, HashSet};
@@ -52,9 +55,14 @@ fn key_of(line: &str) -> Option<(&str, &str)> {
     Some((k.trim(), v.trim()))
 }
 
-fn is_star_line(line: &str) -> bool {
-    matches!(key_of(line), Some((k, _)) if k.eq_ignore_ascii_case("star"))
+fn is_key_line(line: &str, key: &str) -> bool {
+    matches!(key_of(line), Some((k, _)) if k.eq_ignore_ascii_case(key))
 }
+
+const STAR: &str = "star";
+const RATING: &str = "rating";
+/// 最高星级
+pub const MAX_RATING: u8 = 5;
 
 impl IniDoc {
     pub fn parse(text: &str) -> Self {
@@ -103,6 +111,27 @@ impl IniDoc {
         out
     }
 
+    /// 所有带星级的文件：文件名（已规范化，见 [`norm_name`]）→ 1～5。写坏了的值（0、6、字母）不算。
+    /// 同一个文件有好几个段时取最高的。
+    pub fn ratings(&self) -> HashMap<String, u8> {
+        let mut out: HashMap<String, u8> = HashMap::new();
+        let mut cur: Option<&str> = None;
+        for l in &self.lines {
+            if let Some(s) = section_of(l) {
+                cur = Some(s);
+            } else if let (Some(sec), Some((k, v))) = (cur, key_of(l)) {
+                if !k.eq_ignore_ascii_case(RATING) {
+                    continue;
+                }
+                if let Some(r) = v.parse::<u8>().ok().filter(|r| (1..=MAX_RATING).contains(r)) {
+                    let e = out.entry(norm_name(sec)).or_insert(0);
+                    *e = (*e).max(r);
+                }
+            }
+        }
+        out
+    }
+
     /// 从段头 `start` 开始的段的结束行（下一个段头或文件末尾）。
     fn section_end(&self, start: usize) -> usize {
         self.lines[start + 1..]
@@ -126,7 +155,7 @@ impl IniDoc {
     #[cfg(test)]
     pub fn set_star(&mut self, file: &str, starred: bool) -> bool {
         match self.section_range(file) {
-            Some((start, _)) => self.set_star_at(start, starred),
+            Some((start, _)) => self.set_key_at(start, STAR, starred.then_some("yes")),
             None if starred => {
                 self.lines.push(format!("[{file}]"));
                 self.lines.push("star=yes".into());
@@ -140,6 +169,18 @@ impl IniDoc {
     /// 几千张一起打星就是“几千 × 几千行”，要好几秒；这里先建一次“文件名 → 行号”索引，
     /// 已有的段从后往前改（前面的行号不受影响），新段统一追加到末尾。
     pub fn set_star_many(&mut self, files: &[String], starred: bool) -> bool {
+        self.set_key_many(files, STAR, starred.then_some("yes"))
+    }
+
+    /// 批量设置星级：0 = 清除，1～5 = 星级。只动 `rating=` 这一行，星标不受影响。
+    pub fn set_rating_many(&mut self, files: &[String], rating: u8) -> bool {
+        let value = (rating > 0).then(|| rating.min(MAX_RATING).to_string());
+        self.set_key_many(files, RATING, value.as_deref())
+    }
+
+    /// 批量把各文件段里的 `key` 设成 `value`；`None` = 删掉这一行（段里没别的东西了就整段删掉）。
+    fn set_key_many(&mut self, files: &[String], key: &str, value: Option<&str>) -> bool {
+        let starred = value.is_some();
         // 同一个文件可能有好几个段（例如在 Windows 上改过文件名大小写）：取消时每个段都要清，否则永远“取消不掉”
         let mut index: HashMap<String, Vec<usize>> = HashMap::new();
         for (i, l) in self.lines.iter().enumerate() {
@@ -151,47 +192,54 @@ impl IniDoc {
         let mut appended = Vec::new();
         let mut seen = HashSet::new();
         for f in files {
-            let key = norm_name(f);
-            if !seen.insert(key.clone()) {
+            let name = norm_name(f);
+            if !seen.insert(name.clone()) {
                 continue;
             }
-            match index.get(&key) {
-                Some(all) if starred => existing.push(all[0]), // 加星：第一个段写上就够了
-                Some(all) => existing.extend(all),
+            match index.get(&name) {
+                // 加星：第一个段写上就够了。星级读的时候取各段最高的，所以别的段里的旧星级要清掉，否则降不下来
+                Some(all) if starred => {
+                    existing.push((all[0], true));
+                    if key == RATING {
+                        existing.extend(all[1..].iter().map(|&i| (i, false)));
+                    }
+                }
+                Some(all) => existing.extend(all.iter().map(|&i| (i, false))),
                 None if starred => appended.push(f),
                 None => {}
             }
         }
-        existing.sort_unstable_by(|a, b| b.cmp(a));
+        existing.sort_unstable_by(|a, b| b.0.cmp(&a.0));
         let mut changed = false;
-        for start in existing {
-            changed |= self.set_star_at(start, starred);
+        for (start, set) in existing {
+            changed |= self.set_key_at(start, key, if set { value } else { None });
         }
         for f in appended {
             self.lines.push(format!("[{f}]"));
-            self.lines.push("star=yes".into());
+            self.lines.push(format!("{key}={}", value.unwrap_or_default()));
             changed = true;
         }
         changed
     }
 
     /// 修改从 `start` 行开始的那个段。
-    fn set_star_at(&mut self, start: usize, starred: bool) -> bool {
+    fn set_key_at(&mut self, start: usize, key: &str, value: Option<&str>) -> bool {
         let end = self.section_end(start);
-        if starred {
-            if let Some(i) = (start + 1..end).find(|&i| is_star_line(&self.lines[i])) {
-                if self.lines[i].trim() == "star=yes" {
+        if let Some(value) = value {
+            let want = format!("{key}={value}");
+            if let Some(i) = (start + 1..end).find(|&i| is_key_line(&self.lines[i], key)) {
+                if self.lines[i].trim() == want {
                     return false;
                 }
-                self.lines[i] = "star=yes".into();
+                self.lines[i] = want;
             } else {
-                self.lines.insert(start + 1, "star=yes".into());
+                self.lines.insert(start + 1, want);
             }
             return true;
         }
-        let body: Vec<String> = self.lines[start + 1..end].iter().filter(|l| !is_star_line(l)).cloned().collect();
+        let body: Vec<String> = self.lines[start + 1..end].iter().filter(|l| !is_key_line(l, key)).cloned().collect();
         if body.len() + 1 == end - start {
-            return false; // 本来就没星
+            return false; // 本来就没有这一行
         }
         let has_content = body.iter().any(|l| key_of(l).is_some());
         let replacement: Vec<String> = if has_content {
@@ -291,6 +339,48 @@ mod tests {
         assert!(d.set_star_many(&["IMG_1.JPG".into()], false));
         assert!(d.starred().is_empty(), "{}", d.render());
         assert_eq!(d.render(), "[img_1.jpg]\nrotate=rotate(1)\n");
+    }
+
+    #[test]
+    fn rating_is_independent_of_the_star() {
+        let mut d = IniDoc::parse(SAMPLE);
+        assert!(d.ratings().is_empty(), "Picasa 标的星不是星级");
+        assert!(d.set_rating_many(&["IMG_0001.JPG".into(), "new.jpg".into()], 4));
+        let out = d.render();
+        assert!(out.contains("[IMG_0001.JPG]\r\nrating=4\r\nstar=yes\r\nrotate=rotate(1)\r\n"), "{out}");
+        assert!(out.ends_with("[new.jpg]\r\nrating=4\r\n"), "{out}");
+        // 标星级不会顺带加星标
+        assert_eq!(d.starred(), vec!["img_0001.jpg"]);
+        assert_eq!((d.ratings()["img_0001.jpg"], d.ratings()["new.jpg"]), (4, 4));
+        // 同样的星级再写一次：没有变化；改成别的星级：原地改
+        assert!(!d.set_rating_many(&["new.jpg".into()], 4));
+        assert!(d.set_rating_many(&["NEW.JPG".into()], 1));
+        assert!(d.render().ends_with("[new.jpg]\r\nrating=1\r\n"));
+        // 取消星标不动星级，清除星级不动星标
+        assert!(d.set_star_many(&["IMG_0001.JPG".into()], false));
+        assert_eq!(d.ratings()["img_0001.jpg"], 4);
+        assert!(d.set_star_many(&["IMG_0001.JPG".into()], true));
+        assert!(d.set_rating_many(&["IMG_0001.JPG".into(), "new.jpg".into()], 0));
+        assert_eq!(d.starred(), vec!["img_0001.jpg"]);
+        assert!(d.ratings().is_empty());
+        // 只剩星级的段，清掉星级后整段删掉
+        assert!(!d.render().contains("new.jpg"));
+    }
+
+    #[test]
+    fn lowering_a_rating_clears_duplicate_sections() {
+        let mut d = IniDoc::parse("[IMG_1.JPG]\nrating=2\n[img_1.jpg]\nrating=5\nstar=yes\n");
+        assert!(d.set_rating_many(&["IMG_1.JPG".into()], 3));
+        assert_eq!(d.ratings()["img_1.jpg"], 3, "{}", d.render());
+        assert_eq!(d.starred(), vec!["img_1.jpg"]);
+    }
+
+    #[test]
+    fn odd_rating_values_are_ignored() {
+        let d = IniDoc::parse("[a.jpg]\nstar=yes\nrating=9\n[b.jpg]\nrating=3\n[c.jpg]\nRating = 5\n[d.jpg]\nrating=0\n[e.jpg]\nrating=x\n");
+        let r = d.ratings();
+        assert_eq!(r.len(), 2, "{r:?}");
+        assert_eq!((r["b.jpg"], r["c.jpg"]), (3, 5));
     }
 
     #[test]

@@ -8,6 +8,8 @@ export interface Photo {
   /** 修改时间（毫秒），拼进图片 URL 做缓存失效 */
   mtime: number;
   starred: boolean;
+  /** 星级 0～5（0 = 没标）。和星标互不影响：星标相当于 Lightroom 的“选取”，星级就是它的星级 */
+  rating: number;
   /** 同名的 RAW / .xmp 文件名（RAW+JPG 合并显示时，跟着这张 JPG 走） */
   companions: string[];
 }

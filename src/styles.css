@@ -247,6 +247,80 @@ body.resizing * {
   color: var(--star);
   font-size: 11px;
 }
+/* 星标筛选开着：“已加星标的照片”保持按下的样子，右边的 ✕ 提示再点一次就关掉 */
+.sb-starred.on {
+  box-shadow: inset 0 0 0 1px rgba(255, 197, 49, 0.45);
+}
+.sb-starred.on:not(.active) {
+  background: rgba(255, 197, 49, 0.08);
+}
+.sb-off {
+  color: var(--text-dim);
+  font-size: 11px;
+}
+.sb-starred:hover .sb-off {
+  color: var(--text);
+}
+.sb-head-note {
+  margin-left: 6px;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--star);
+}
+/* 筛选框：列表往下滚时贴在侧栏顶上 */
+.sb-tools {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  gap: 4px;
+  padding: 6px 6px 6px;
+  margin-top: -6px;
+  background: var(--panel);
+}
+.sb-filter {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font: inherit;
+  outline: none;
+  -webkit-user-select: text;
+  user-select: text;
+}
+.sb-filter:focus {
+  border-color: var(--accent);
+}
+.sb-foldall {
+  flex: none;
+}
+/* 分组标题（第一层目录，通常是年份）：点击折叠 / 展开 */
+.sb-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px 5px 10px;
+  margin: 2px 6px 0;
+  border-radius: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+  font-weight: 600;
+  color: #c6cad1;
+}
+.sb-group:hover {
+  background: var(--panel-2);
+}
+.sb-group .caret {
+  width: 10px;
+  color: var(--text-dim);
+  font-size: 10px;
+}
+.sb-item.in-group {
+  padding-left: 34px;
+}
 .count {
   color: var(--text-dim);
   font-size: 11px;
@@ -272,6 +346,36 @@ body.resizing * {
 .grid-inner {
   position: relative;
   width: 100%;
+}
+/* 连续翻动时相册之间的分界线：相册名 + 张数 + 一条横线 */
+.sec-head {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 0 14px 8px;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.sec-head::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  margin-bottom: 7px;
+  background: var(--border);
+}
+.sec-name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sec-count {
+  color: var(--text-dim);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
 }
 .cell {
   position: absolute;
@@ -364,6 +468,20 @@ body.resizing * {
   line-height: 15px;
   font-weight: 700;
   letter-spacing: 0.03em;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.6);
+  pointer-events: none;
+}
+/* 星级：右下角一排小星星。白色，和左下角金色的星标区分开 */
+.rate {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  padding: 0 4px;
+  border-radius: 3px;
+  font-size: 9px;
+  line-height: 14px;
+  letter-spacing: 0.05em;
   color: #fff;
   background: rgba(0, 0, 0, 0.6);
   pointer-events: none;
@@ -497,6 +615,26 @@ body.drop-target .content::after {
 }
 .v-main {
   z-index: 1;
+}
+/* 看大图顶栏的五颗星：星级 */
+.v-rate {
+  display: inline-flex;
+  align-items: center;
+}
+.v-rate button {
+  border: none;
+  background: none;
+  padding: 0 1px;
+  font-size: 15px;
+  line-height: 1;
+  color: rgba(255, 255, 255, 0.25);
+  cursor: pointer;
+}
+.v-rate button.on {
+  color: #fff;
+}
+.v-rate button:hover {
+  color: var(--accent);
 }
 .v-starmark {
   position: absolute;
@@ -770,6 +908,12 @@ body.drop-target .content::after {
   display: flex;
   justify-content: flex-end;
   gap: 10px;
+}
+.settings .lang {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-dim);
 }
 
 .menu {
