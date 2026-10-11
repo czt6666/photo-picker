@@ -313,23 +313,24 @@ def run(d, env, export_dir):
     d.save_screenshot(str(SHOTS / "08-export-dialog.png"))
     js(d, "document.querySelector('#export-dialog .dest').value = arguments[0]", str(export_dir))
     js(d, "document.querySelector('#export-dialog .sub').value = '精选'")
-    js(d, "document.querySelector('#export-dialog input[name=mode][value=resize]').checked = true")
-    js(d, "const s = document.querySelector('#export-dialog .maxpx'); s.value = '2048'")
     # 连点两下“导出”：只能导出一次，不能出现“导出失败”
     js(d, "const g = document.querySelector('#export-dialog .go'); g.click(); g.click();")
     ok = wait(lambda: "完成" in d.find_element(By.CSS_SELECTOR, "#export-dialog .ptext").text, timeout=60)
     check("连点两下导出只导出一次", ok and "失败" not in d.find_element(By.CSS_SELECTOR, "#export-dialog .ptext").text,
           d.find_element(By.CSS_SELECTOR, "#export-dialog .ptext").text)
     out = sorted(p.name for p in (export_dir / "精选").glob("*")) if (export_dir / "精选").exists() else []
-    check("导出全部星标照片（缩小到 2048），同名 CR3 一起导出", out == ["DSC_10.jpg", "DSC_25.jpg", "IMG_0005.CR3", "IMG_0005.jpg"], str(out))
+    check("在星标汇总里导出全部星标照片（原样复制），同名 CR3 一起导出", out == ["DSC_10.jpg", "DSC_25.jpg", "IMG_0005.CR3", "IMG_0005.jpg"], str(out))
     if "IMG_0005.CR3" in out:
         check("RAW 原样复制（字节一致）", (export_dir / "精选" / "IMG_0005.CR3").read_bytes() == (PHOTOS / "大图" / "IMG_0005.CR3").read_bytes())
     done_text = d.find_element(By.CSS_SELECTOR, "#export-dialog .ptext").text
     check("导出完成提示里写明文件数", "3 张" in done_text and "4 个文件" in done_text, done_text)
     d.save_screenshot(str(SHOTS / "09-export-done.png"))
-    if out:
+    # 缩小导出界面上已经去掉，后端还支持：直接走后端命令测
+    invoke(d, "export_photos", {"request": {"paths": [str(PHOTOS / "大图" / "IMG_0005.jpg")], "dest": str(export_dir), "subfolder": "缩小",
+                                            "mode": "resize", "maxPx": 2048, "quality": 90, "includeCompanions": False}})
+    if (export_dir / "缩小" / "IMG_0005.jpg").exists():
         from PIL import Image
-        im = Image.open(export_dir / "精选" / "IMG_0005.jpg")
+        im = Image.open(export_dir / "缩小" / "IMG_0005.jpg")
         exif = im.getexif()
         check("缩小导出：竖图转正、长边 2048、EXIF 保留且方向重置为 1",
               im.size == (1365, 2048) and exif.get(0x0112) == 1 and exif.get(0x0110) == "Canon EOS R5", f"{im.size} {dict(exif)}")
