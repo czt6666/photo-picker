@@ -239,7 +239,7 @@ python3 tests/e2e/run_e2e.py /tmp/pp-e2e
 cd src-tauri && PP_BENCH_FILE=/path/to/big.jpg cargo test --release bench_render -- --ignored --nocapture
 ```
 
-端到端测试（54 项）覆盖：工作目录（切换、重启后记住、最近列表）、读取已有 Picasa 星标、虚拟化网格、Shift+S 切换星标相册、拖动侧栏宽度、
+端到端测试（53 项）覆盖：工作目录（切换、重启后记住、最近列表）、读取已有 Picasa 星标、虚拟化网格、Shift+S 切换星标相册、拖动侧栏宽度、
 空格 / 多选打星并写回 `.picasa.ini`、RAW+JPG 合并显示与成对打星 / 导出、滚轮一格一张、预加载命中率、EXIF 竖拍转正、
 1:1 加载原图、星标相册、缩小导出保留 EXIF、原图导出字节一致、连点导出只导出一次、“未连接”目录置灰与清理、
 协议拒绝访问工作目录以外的文件。

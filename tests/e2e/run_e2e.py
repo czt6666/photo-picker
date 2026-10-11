@@ -125,6 +125,9 @@ def open_folder(d, name):
 
 def run(d, env, export_dir):
     d.set_window_size(1400, 900)
+    # 下面按中文界面文字判断；不管测试机的系统语言是什么，都固定用中文
+    js(d, "localStorage.setItem('pp.lang', '\"zh\"'); location.reload()")
+    time.sleep(1)
     # ---------- 图库 ----------
     # 启动后会自动打开第一个文件夹；等它稳定下来（侧栏会随视图切换重绘）
     wait(lambda: "张照片" in d.find_element(By.ID, "status-count").text, timeout=30)
@@ -315,11 +318,11 @@ def run(d, env, export_dir):
     js(d, "document.querySelector('#export-dialog .sub').value = '精选'")
     # 连点两下“导出”：只能导出一次，不能出现“导出失败”
     js(d, "const g = document.querySelector('#export-dialog .go'); g.click(); g.click();")
-    ok = wait(lambda: "完成" in d.find_element(By.CSS_SELECTOR, "#export-dialog .ptext").text, timeout=60)
+    ok = wait(lambda: "已导出" in d.find_element(By.CSS_SELECTOR, "#export-dialog .ptext").text, timeout=60)
     check("连点两下导出只导出一次", ok and "失败" not in d.find_element(By.CSS_SELECTOR, "#export-dialog .ptext").text,
           d.find_element(By.CSS_SELECTOR, "#export-dialog .ptext").text)
     out = sorted(p.name for p in (export_dir / "精选").glob("*")) if (export_dir / "精选").exists() else []
-    check("在星标汇总里导出全部星标照片（原样复制），同名 CR3 一起导出", out == ["DSC_10.jpg", "DSC_25.jpg", "IMG_0005.CR3", "IMG_0005.jpg"], str(out))
+    check("在星标汇总里导出全部星标照片（原样复制），同名 CR3 一起导出", out == ["DSC_10.jpg", "DSC_25.jpg", "IMG_0005.CR3", "IMG_0005.JPG"], str(out))
     if "IMG_0005.CR3" in out:
         check("RAW 原样复制（字节一致）", (export_dir / "精选" / "IMG_0005.CR3").read_bytes() == (PHOTOS / "大图" / "IMG_0005.CR3").read_bytes())
     done_text = d.find_element(By.CSS_SELECTOR, "#export-dialog .ptext").text
@@ -394,7 +397,7 @@ def run(d, env, export_dir):
     items = wait(lambda: js(d, "return [...document.querySelectorAll('.menu button')].map(b => [b.innerText.replace(/\\s+/g, ' '), b.disabled])"))
     greyed = [t for t, dis in items or [] if "未连接" in t and dis]
     check("不存在的最近目录显示“未连接”且不可点", len(greyed) == 1 and "temp-workdir" in greyed[0], str(items))
-    js(d, "[...document.querySelectorAll('.menu button')].find(b => b.innerText.startsWith('从列表中移除')).click()")
+    js(d, "[...document.querySelectorAll('.menu button')].find(b => b.innerText.startsWith('移除未连接的')).click()")
     time.sleep(1)
     d.find_element(By.ID, "btn-workdir").click()
     items = wait(lambda: js(d, "return [...document.querySelectorAll('.menu button')].map(b => b.innerText)"))
