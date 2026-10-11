@@ -60,6 +60,8 @@ export class Viewer {
   private preTimer = 0;
   private slowTimer = 0;
   private navStart = 0;
+  /** 正在飞速翻页：路过的照片不换原图 */
+  private flying = false;
   private main: HTMLImageElement | null = null;
   private mainFull = false;
   private dims: Dims = { w: 0, h: 0, src: 'none' };
@@ -67,6 +69,11 @@ export class Viewer {
   private scale: number | null = null;
   private panX = 0;
   private panY = 0;
+  /**
+   * 放大状态下翻到的新照片还不知道尺寸时，先记下要沿用的放大倍数和位置，尺寸一到就套上。
+   * rx/ry = 平移量占显示尺寸的比例（看的是图上哪一处）；w/h = 上一张的尺寸。
+   */
+  private pendingZoom: { scale: number; rx: number; ry: number; w: number; h: number } | null = null;
   private drag: { x: number; y: number; px: number; py: number } | null = null;
   private infoCache = new Map<string, PhotoInfo>();
   private wheel = new WheelStepper();
@@ -212,7 +219,7 @@ export class Viewer {
         void this.toggleStar();
         return true;
       case 'Escape':
-        if (this.scale !== null) this.fit();
+        if (this.scale !== null || this.pendingZoom) this.fit();
         else this.close();
         return true;
       case 'Enter':
@@ -263,14 +270,18 @@ export class Viewer {
     const rapid = !first && interval < RAPID_MS;
     const flying = !first && interval < FLYING_MS;
     this.navDir = i >= this.index ? 1 : -1;
+    this.flying = flying;
     this.lastNavT = now;
     this.navStart = now;
     this.index = i;
     const tok = ++this.token;
     const p = this.list[i];
 
+    // 放大状态下翻页：沿用放大倍数和看的位置（同一台相机拍的照片尺寸一样，正好对比同一处的对焦）
+    const keep = !first && this.scale !== null && this.dims.w ? this.viewState(this.scale) : null;
     this.scale = null;
     this.panX = this.panY = 0;
+    this.pendingZoom = null;
     this.errorEl.hidden = true;
     this.stage.classList.remove('loading');
     clearTimeout(this.loadTimer);
@@ -286,6 +297,10 @@ export class Viewer {
 
     const info = this.infoCache.get(p.path);
     this.dims = info ? { w: info.width, h: info.height, src: 'info' } : { w: 0, h: 0, src: 'none' };
+    if (keep) {
+      this.pendingZoom = keep;
+      if (info) this.applyPendingZoom(false); // 换原图等下面清晰版就位后再说
+    }
     this.showInfo(p, info);
     if (!info) {
       api.photoInfo(p.path).then(
@@ -293,8 +308,15 @@ export class Viewer {
           this.infoCache.set(p.path, inf);
           if (tok !== this.token) return;
           if (this.dims.src !== 'exact' && inf.width > 0) {
+            const old = this.dims;
             this.dims = { w: inf.width, h: inf.height, src: 'info' };
             if (this.main) this.fixAspect(this.main);
+            // 已经按“同尺寸”的猜测套用了放大，真实尺寸略有不同时按比例挪一下，看的还是同一处
+            if (this.scale !== null && old.w && old.h) {
+              this.panX *= this.dims.w / old.w;
+              this.panY *= this.dims.h / old.h;
+            }
+            this.applyPendingZoom();
             this.layout();
             this.maybeUpgrade();
           }
@@ -314,9 +336,14 @@ export class Viewer {
       this.setMain(ready, false);
       this.record(i, true);
       if (flying) {
-        // 飞速翻页中：停下来之后再预加载（见 loadCurrent / settle 定时器）
-        this.loadTimer = window.setTimeout(() => this.schedulePreload(), SETTLE_MS);
+        // 飞速翻页中：停下来之后再预加载、换原图（见 loadCurrent / settle 定时器）
+        this.loadTimer = window.setTimeout(() => {
+          this.flying = false;
+          this.maybeUpgrade();
+          this.schedulePreload();
+        }, SETTLE_MS);
       } else {
+        this.maybeUpgrade();
         this.schedulePreload();
       }
     } else {
@@ -330,6 +357,7 @@ export class Viewer {
   private loadCurrent(tok: number): void {
     const p = this.list[this.index];
     if (!p || tok !== this.token) return;
+    this.flying = false;
     const max = this.previewMax();
     const key = this.keyFor(p, max);
     // 只保留当前和相邻几张的加载，其余取消
@@ -342,6 +370,7 @@ export class Viewer {
         this.stage.classList.remove('loading');
         this.setMain(img, false);
         this.record(this.index, false);
+        this.maybeUpgrade();
         this.schedulePreload();
       },
       (err) => {
@@ -365,6 +394,9 @@ export class Viewer {
         const p = this.list[this.index + d];
         if (p) this.loader.load(this.keyFor(p, max), this.urlFor(p, max, false), photoUrl(p, max, false, true)).catch(() => {});
       }
+      // 放大看细节时，下一张翻过去也是放大的：顺手把它的原图也备好
+      const next = this.scale !== null ? this.list[this.index + this.navDir] : undefined;
+      if (next) this.loader.load(this.keyFor(next, 0), this.urlFor(next, 0, false), photoUrl(next, 0, false, true)).catch(() => {});
     }, 16);
   }
 
@@ -376,6 +408,8 @@ export class Viewer {
     }
     const p = this.list[this.index];
     if (p) keys.add(this.keyFor(p, 0));
+    const next = this.list[this.index + this.navDir];
+    if (next && (this.scale !== null || this.pendingZoom)) keys.add(this.keyFor(next, 0));
     return keys;
   }
 
@@ -426,6 +460,13 @@ export class Viewer {
   /** 还不知道原图尺寸时，先用已加载图片的比例（只要比例对，“适合窗口”就能正确布局） */
   private guessDims(img: HTMLImageElement): void {
     if (!img.naturalWidth) return;
+    const z = this.pendingZoom;
+    if (z && Math.abs(img.naturalWidth / img.naturalHeight - z.w / z.h) < 0.01) {
+      // 放大翻页且比例和上一张一样：多半是同一台相机，先按上一张的尺寸套上放大，不用等后端报尺寸
+      this.dims = { w: z.w, h: z.h, src: 'guess' };
+      this.applyPendingZoom();
+      return;
+    }
     this.dims = { w: img.naturalWidth, h: img.naturalHeight, src: 'guess' };
   }
 
@@ -479,7 +520,27 @@ export class Viewer {
     this.zoomBtn.textContent = this.scale === null ? '1:1' : `${Math.round(s * dpr * 100)}%`;
   }
 
+  /** 当前的放大倍数和看的位置（平移量换算成占显示尺寸的比例，换了尺寸不同的图也指向同一处） */
+  private viewState(scale: number): { scale: number; rx: number; ry: number; w: number; h: number } {
+    const { w, h } = this.dims;
+    return { scale, rx: this.panX / (w * scale), ry: this.panY / (h * scale), w, h };
+  }
+
+  private applyPendingZoom(upgrade = true): void {
+    const z = this.pendingZoom;
+    const { w, h } = this.dims;
+    if (!z || !w || !h) return;
+    this.pendingZoom = null;
+    this.scale = Math.min(MAX_SCALE, z.scale);
+    this.panX = z.rx * w * this.scale;
+    this.panY = z.ry * h * this.scale;
+    if (this.scale <= this.fitScale() * 1.001) this.fit();
+    else this.layout();
+    if (upgrade) this.maybeUpgrade();
+  }
+
   private fit(): void {
+    this.pendingZoom = null;
     this.scale = null;
     this.panX = this.panY = 0;
     this.layout();
@@ -489,6 +550,7 @@ export class Viewer {
   private zoomTo(newScale: number, cx?: number, cy?: number): void {
     const fit = this.fitScale();
     newScale = Math.max(fit, Math.min(MAX_SCALE, newScale));
+    this.pendingZoom = null;
     const old = this.currentScale();
     const sw = this.stage.clientWidth;
     const sh = this.stage.clientHeight;
@@ -511,7 +573,7 @@ export class Viewer {
 
   /** 1:1 = 一个图像像素对应一个屏幕物理像素，看对焦/噪点用 */
   private toggleActualSize(e?: MouseEvent): void {
-    if (this.scale !== null) return this.fit();
+    if (this.scale !== null || this.pendingZoom) return this.fit();
     const r = this.stage.getBoundingClientRect();
     this.zoomTo(1 / (window.devicePixelRatio || 1), e ? e.clientX - r.left : undefined, e ? e.clientY - r.top : undefined);
   }
@@ -519,7 +581,7 @@ export class Viewer {
   /** 放大后当前图的分辨率不够了 → 换原图 */
   private maybeUpgrade(): void {
     const p = this.current;
-    if (!p || this.mainFull || !this.main || this.scale === null) return;
+    if (!p || this.flying || this.mainFull || !this.main || this.scale === null) return;
     const dpr = window.devicePixelRatio || 1;
     const needPx = this.dims.w * this.currentScale() * dpr;
     if (needPx <= this.main.naturalWidth * 1.05) return;
@@ -565,14 +627,15 @@ export class Viewer {
       this.zoomBy(f, e.clientX - r.left, e.clientY - r.top);
       return;
     }
-    if (this.scale !== null) {
-      // 放大状态下滚轮/双指滑动 = 平移
+    if (e.altKey && this.scale !== null) {
+      // 放大状态下按住 ⌥ 滚动 = 平移（也可以直接拖动）
       this.panX -= e.deltaX;
       this.panY -= e.deltaY;
       this.layout();
       return;
     }
-    const step = this.wheel.feed(e as WheelEvent & { wheelDeltaY?: number });
+    // 放大与否都是翻页；放大时翻到下一张会保持放大倍数和位置
+    const step = this.wheel.feed(e);
     if (step) this.step(step);
   }
 
