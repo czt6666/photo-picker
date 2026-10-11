@@ -49,6 +49,19 @@ npm run tauri dev          # 开发模式
 npm run tauri build        # 打包，产物在 src-tauri/target/release/bundle/
 ```
 
+### 本地调试预览版
+
+不想等 CI 打包、想马上看到改动效果，用 `scripts/preview.sh`（`npm run preview` 也一样）。预览版叫 “PhotoPicker Preview”，设置和缩略图缓存跟正式版分开存，两个可以同时开。
+
+```bash
+npm run preview                     # 开发模式：改 src/ 下的前端代码，窗口里立刻刷新；改 Rust 会自动重编译重启
+npm run preview:app                 # 打一个调试版 .app 并打开（不热刷新，之后双击就能再开）
+scripts/preview.sh pr 1 2           # 把 PR #1、#2 合到最新 main 上一起试（在 .preview/ 里，不动当前代码）
+scripts/preview.sh branch 某分支名   # 同上，按分支名；以上都可以加 --app
+```
+
+第一次要编译 Rust，几分钟；之后只编译改动的部分，快很多。
+
 ## 星标存在哪里？
 
 和 Picasa 3 完全一样：存在**照片所在文件夹**的隐藏文件 `.picasa.ini` 里。例如给 `IMG_0001.JPG` 加星后：

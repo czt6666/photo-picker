@@ -9,6 +9,8 @@
     "build": "tsc --noEmit && vite build",
     "test": "vitest run",
     "tauri": "tauri",
+    "preview": "scripts/preview.sh",
+    "preview:app": "scripts/preview.sh --app",
     "icon": "tauri icon app-icon.png"
   },
   "dependencies": {

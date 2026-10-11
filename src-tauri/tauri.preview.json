@@ -1,0 +1,16 @@
+{
+  "productName": "PhotoPicker Preview",
+  "identifier": "io.github.czt6666.photopicker.preview",
+  "app": {
+    "windows": [
+      {
+        "title": "选片（调试预览版）",
+        "width": 1280,
+        "height": 820,
+        "minWidth": 760,
+        "minHeight": 480,
+        "dragDropEnabled": true
+      }
+    ]
+  }
+}
