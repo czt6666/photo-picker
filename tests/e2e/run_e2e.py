@@ -164,6 +164,20 @@ def run(d, env, export_dir):
     ok = wait(lambda: "300 张" in d.find_element(By.ID, "status-count").text)
     check("再按 Shift+S 回到原相册", ok, d.find_element(By.ID, "status-count").text)
 
+    # 星标筛选：点“已加星标的照片”打开，侧栏只剩有星标的相册；点相册看它的星标照片；再点一次关掉
+    folder_rows = lambda: js(d, "return [...document.querySelectorAll('.sb-item[data-path]')].map(e => e.dataset.path.split('/').pop())")  # noqa: E731
+    d.find_element(By.CSS_SELECTOR, ".sb-starred").click()
+    ok = wait(lambda: "3 张" in d.find_element(By.ID, "status-count").text and folder_rows() == ["旅行"])
+    check("星标筛选打开：侧栏只列有星标的相册", ok, str(folder_rows()))
+    open_folder(d, "旅行")
+    ok = wait(lambda: "3 张" in d.find_element(By.ID, "status-count").text and "仅星标" in d.find_element(By.ID, "view-title").text
+              and d.find_elements(By.CSS_SELECTOR, ".sb-starred.on") and d.find_elements(By.CSS_SELECTOR, ".sb-item.active[data-path]"))
+    check("星标筛选下点相册：只看这个相册的星标照片", ok, d.find_element(By.ID, "view-title").text)
+    d.find_element(By.CSS_SELECTOR, ".sb-starred").click()
+    ok = wait(lambda: "300 张" in d.find_element(By.ID, "status-count").text and len(folder_rows()) == 3
+              and not d.find_elements(By.CSS_SELECTOR, ".sb-starred.on"))
+    check("再点一次“已加星标的照片”：取消筛选，留在当前相册", ok, f"{d.find_element(By.ID, 'status-count').text} {folder_rows()}")
+
     # 拖动侧栏分隔条改宽度，顶栏工作目录区跟着变、两者一样宽
     # 分隔条本身 0 宽（只靠伸出的透明区接鼠标），所以从侧栏中心往右偏到右边缘内 2px 处按下
     sidebar = d.find_element(By.ID, "sidebar")

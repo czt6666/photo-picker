@@ -8,7 +8,7 @@ import { api } from './api';
 import { closeExportDialog, isExportOpen, openExportDialog } from './exportDialog';
 import { Grid } from './grid';
 import { baseName, makeSidebarResizable, Sidebar } from './sidebar';
-import { prefs, store, type View } from './store';
+import { isStarMode, prefs, store, type View } from './store';
 import type { Library, Photo, Progress } from './types';
 import { closeMenu, contextMenu, esc, toast } from './ui';
 import { formatBytes, Viewer } from './viewer';
@@ -50,8 +50,9 @@ const viewer = new Viewer($('viewer'), {
 makeSidebarResizable($('sb-resizer'));
 
 const sidebar = new Sidebar($('sidebar'), {
-  openFolder: (path) => void openFolder(path),
-  openStarred: () => void openStarred(),
+  // 星标筛选开着时点相册：筛选保持，只看这个相册里的星标照片
+  openFolder: (path) => void openFolder(path, isStarMode(store.view)),
+  toggleStarred: () => toggleStarredView(),
   folderMenu(path, x, y) {
     contextMenu(x, y, [
       { label: REVEAL_LABEL, action: () => void revealItemInDir(path).catch(() => {}) },
@@ -74,7 +75,7 @@ function setLibrary(lib: Library): void {
 }
 
 let viewSeq = 0;
-/** 最近打开的相册：从星标相册按 Shift+S 回到这里 */
+/** 最近打开的相册：关掉星标筛选时回到这里 */
 let lastFolder: string | null = null;
 
 async function showView(view: View, load: () => Promise<Photo[]>): Promise<boolean> {
@@ -100,7 +101,8 @@ async function showView(view: View, load: () => Promise<Photo[]>): Promise<boole
   return true;
 }
 
-const openFolder = (path: string) => showView({ kind: 'folder', path }, () => api.listFolder(path));
+const openFolder = (path: string, starredOnly = false) =>
+  showView(starredOnly ? { kind: 'folder', path, starredOnly } : { kind: 'folder', path }, () => api.listFolder(path));
 const openStarred = () => showView({ kind: 'starred' }, () => api.listStarred());
 
 function showEmptyView(): void {
@@ -120,7 +122,8 @@ function renderChrome(): void {
   const v = store.view;
   if (v.kind === 'folder') {
     const f = store.folder(v.path);
-    titleEl.innerHTML = `<b>${esc(f?.name ?? v.path.split(/[\\/]/).pop() ?? '')}</b> <span class="dim">${esc(v.path)}</span>`;
+    const tag = v.starredOnly ? ' <span class="star">★</span> <span class="dim">仅星标 ·</span>' : '';
+    titleEl.innerHTML = `<b>${esc(f?.name ?? v.path.split(/[\\/]/).pop() ?? '')}</b>${tag} <span class="dim">${esc(v.path)}</span>`;
   } else if (v.kind === 'starred') {
     titleEl.innerHTML = '<b><span class="star">★</span> 已加星标的照片</b> <span class="dim">工作目录中的所有相册</span>';
   } else {
@@ -146,6 +149,8 @@ function renderEmpty(): void {
     html = '<div class="empty-card"><p class="dim">从左侧选择一个相册</p></div>';
   } else if (!store.visible.length) {
     if (store.view.kind === 'starred') html = '<div class="empty-card"><h2>还没有星标照片</h2><p class="dim">看照片时按 <kbd>空格</kbd> 加星标，工作目录里所有星标照片都会汇总到这里。</p></div>';
+    else if (store.view.kind === 'folder' && store.view.starredOnly && !store.query)
+      html = '<div class="empty-card"><p class="dim">这个相册里没有星标照片了</p><p class="dim">再点一次左上的“已加星标的照片”（或按 <kbd>Shift</kbd>+<kbd>S</kbd>）取消星标筛选</p></div>';
     else if (store.query) html = `<div class="empty-card"><p class="dim">没有文件名包含“${esc(store.query)}”的照片</p></div>`;
     else html = '<div class="empty-card"><p class="dim">这个文件夹里没有照片</p></div>';
   }
@@ -160,7 +165,7 @@ function updateStatus(): void {
   const starred = store.visible.filter((p) => p.starred).length;
   const sel = store.selection.size;
   let s = store.view.kind === 'none' ? '' : `${total} 张照片`;
-  if (starred && store.view.kind !== 'starred') s += `  ·  ★ ${starred}`;
+  if (starred && !isStarMode(store.view)) s += `  ·  ★ ${starred}`;
   if (sel) {
     const bytes = store.selectedPhotos().reduce((n, p) => n + p.size, 0);
     s += `  ·  已选 ${sel} 张（${formatBytes(bytes)}）`;
@@ -204,8 +209,8 @@ async function toggleStar(photos: Photo[]): Promise<void> {
     }
     sidebar.render();
     if (r.fallback) toast('照片所在文件夹不可写，星标已保存在本机的 App 数据里', 'warn', 4000);
-    // 星标相册里取消星标：照片应当消失（看图器里先不动，回网格时再刷新）
-    if (!target && !viewer.opened && store.view.kind === 'starred') {
+    // 星标筛选下取消星标：照片应当消失（看图器里先不动，回网格时再刷新）
+    if (!target && !viewer.opened && isStarMode(store.view)) {
       store.refilter();
       grid.reset(true);
       renderEmpty();
@@ -311,7 +316,7 @@ function applyWorkdir(lib: Library): void {
 async function openInitialView(lib: Library): Promise<void> {
   const last = lib.workdir ? prefs.get<View>(`lastView:${lib.workdir}`, { kind: 'none' }) : { kind: 'none' as const };
   if (last.kind === 'starred' && (await openStarred())) return;
-  if (last.kind === 'folder' && lib.folders.some((f) => f.path === last.path) && (await openFolder(last.path))) return;
+  if (last.kind === 'folder' && lib.folders.some((f) => f.path === last.path) && (await openFolder(last.path, !!last.starredOnly))) return;
   for (const f of lib.folders.slice(0, 3)) {
     if (f.path !== (last.kind === 'folder' ? last.path : '') && (await openFolder(f.path))) return;
   }
@@ -358,7 +363,7 @@ async function rescan(): Promise<void> {
   toast('正在重新扫描工作目录…');
   setLibrary(await api.rescan());
   const v = store.view;
-  if (v.kind === 'folder' && store.folder(v.path)) await openFolder(v.path);
+  if (v.kind === 'folder' && store.folder(v.path)) await openFolder(v.path, !!v.starredOnly);
   else if (v.kind === 'starred') await openStarred();
   else await openInitialView(store.library);
 }
@@ -376,14 +381,24 @@ $('btn-rescan').addEventListener('click', () => void rescan());
 $('btn-export').addEventListener('click', () => openExportDialog());
 starBtn.addEventListener('click', () => void toggleStar(starTargets()));
 
-/** Shift+S：在“已加星标的照片”和刚才看的相册之间来回切换 */
+/**
+ * 点侧栏“已加星标的照片”或按 Shift+S：星标筛选开 / 关。
+ * 打开：先看所有相册的星标汇总，侧栏只剩有星标的相册，点哪个就看哪个的星标照片。
+ * 关闭：正在看某个相册就留在这个相册（显示全部照片）；在汇总里就回到之前看的相册。
+ */
 function toggleStarredView(): void {
-  if (store.view.kind !== 'starred') {
+  const v = store.view;
+  if (!isStarMode(v)) {
     void openStarred();
+    return;
+  }
+  if (v.kind === 'folder' && store.folder(v.path)) {
+    void openFolder(v.path);
     return;
   }
   const back = lastFolder && store.folder(lastFolder) ? lastFolder : store.library.folders[0]?.path;
   if (back) void openFolder(back);
+  else showEmptyView();
 }
 
 let searchTimer = 0;
@@ -431,7 +446,7 @@ const HELP = [
   [modKey('A'), '全选'],
   ['回车、双击', '看大图'],
   [`空格（或 S、${modKey('8')}）`, '加 / 取消星标（多选时：有未加星的就全部加星）'],
-  ['Shift+S', '“已加星标的照片” ↔ 刚才的相册'],
+  ['Shift+S', '星标筛选开 / 关（同点侧栏“已加星标的照片”）'],
   [modKey('E'), '导出'],
   [modKey('F'), '搜索文件名'],
   [modKey('O'), '选择 / 切换工作目录'],

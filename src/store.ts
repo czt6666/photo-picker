@@ -2,7 +2,14 @@
 
 import type { Folder, Library, Photo } from './types';
 
-export type View = { kind: 'folder'; path: string } | { kind: 'starred' } | { kind: 'none' };
+/**
+ * folder 视图带 starredOnly = 星标筛选开着时打开的相册，只显示其中的星标照片；
+ * starred = 星标筛选开着、还没挑具体相册时的汇总（所有相册的星标照片）。
+ */
+export type View = { kind: 'folder'; path: string; starredOnly?: boolean } | { kind: 'starred' } | { kind: 'none' };
+
+/** 星标筛选是否开着（侧栏“已加星标的照片”处于按下状态） */
+export const isStarMode = (v: View): boolean => v.kind === 'starred' || (v.kind === 'folder' && !!v.starredOnly);
 
 type Topic = 'library' | 'photos' | 'selection' | 'stars' | 'view';
 type Listener = () => void;
@@ -12,7 +19,7 @@ class Store {
   view: View = { kind: 'none' };
   /** 当前视图（文件夹 / 星标相册）的全部照片 */
   all: Photo[] = [];
-  /** 经过搜索过滤（星标相册里还要去掉取消了星标的）后的照片，网格和看图器都基于它 */
+  /** 经过搜索过滤（星标筛选下还要去掉没星标的）后的照片，网格和看图器都基于它 */
   visible: Photo[] = [];
   query = '';
   selection = new Set<string>();
@@ -62,8 +69,8 @@ class Store {
   /** 重新计算可见列表。keepSelection=false 时清空选择。 */
   refilter(keepSelection = true): void {
     const q = this.query.trim().toLowerCase();
-    // 星标相册里取消了星标的照片也要消失
-    const onlyStar = this.view.kind === 'starred';
+    // 星标筛选下，取消了星标的照片也要消失
+    const onlyStar = isStarMode(this.view);
     const match = (p: Photo) => !q || p.name.toLowerCase().includes(q) || p.companions.some((c) => c.toLowerCase().includes(q));
     this.visible = this.all.filter((p) => (!onlyStar || p.starred) && match(p));
     if (keepSelection) {
