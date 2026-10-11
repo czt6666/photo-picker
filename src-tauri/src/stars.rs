@@ -93,10 +93,45 @@ fn edit_ini(path: &Path, names: &[String], starred: bool, header: Option<&str>) 
         return Ok(());
     }
     let tmp = path.with_extension(format!("ini.tmp{}", std::process::id()));
-    fs::write(&tmp, doc.render())?;
-    fs::rename(&tmp, path).inspect_err(|_| {
+    write_new(&tmp, doc.render().as_bytes())?;
+    replace_file(&tmp, path).inspect_err(|_| {
         let _ = fs::remove_file(&tmp);
     })
+}
+
+/// 写一个新文件。Windows 上带“隐藏”属性：Windows 不会自动隐藏点开头的文件，
+/// Picasa 写的 `.picasa.ini` 本来就是隐藏的，我们也照做，免得在资源管理器里多出一个文件。
+/// （改名替换时目标文件的属性会被临时文件的属性取代，所以要在临时文件上就设好。）
+fn write_new(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    use std::io::Write;
+    let mut opts = fs::OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_ATTRIBUTE_HIDDEN: u32 = 0x2;
+        opts.attributes(FILE_ATTRIBUTE_HIDDEN);
+    }
+    opts.open(path)?.write_all(bytes)
+}
+
+/// 用 `from` 原子替换 `to`。
+/// Windows 上目标文件被别的程序短暂打开（杀毒软件、索引服务、资源管理器预览）时改名会失败，
+/// 稍等重试几次，而不是马上判定“文件夹不可写”、把星标存到兜底目录去。
+fn replace_file(from: &Path, to: &Path) -> io::Result<()> {
+    let attempts = if cfg!(windows) { 5 } else { 1 };
+    let mut last = None;
+    for i in 0..attempts {
+        match fs::rename(from, to) {
+            Ok(()) => return Ok(()),
+            Err(e) if e.kind() == io::ErrorKind::PermissionDenied && i + 1 < attempts => {
+                last = Some(e);
+                std::thread::sleep(std::time::Duration::from_millis(40 << i));
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    Err(last.unwrap_or_else(|| io::Error::other("rename failed")))
 }
 
 fn log_warn(msg: &str) {
@@ -135,6 +170,22 @@ mod tests {
         let set = store.load(photos.path());
         assert!(!is_starred(&set, "IMG_1.JPG"));
         assert!(is_starred(&set, "IMG_2.JPG"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn picasa_ini_is_hidden_on_windows_like_picasa_does() {
+        use std::os::windows::fs::MetadataExt;
+        let photos = tempfile::tempdir().unwrap();
+        let app = tempfile::tempdir().unwrap();
+        let store = StarStore::new(app.path().join("stars"));
+        let hidden = || fs::metadata(photos.path().join(INI_NAME)).unwrap().file_attributes() & 0x2 != 0;
+        store.set(photos.path(), &names(&["a.jpg"]), true).unwrap();
+        assert!(hidden());
+        // 再改一次（替换已存在的隐藏文件）也要成功，且依然隐藏
+        assert_eq!(store.set(photos.path(), &names(&["b.jpg"]), true).unwrap(), StarLocation::Folder);
+        assert!(hidden());
+        assert_eq!(store.load(photos.path()).len(), 2);
     }
 
     #[test]

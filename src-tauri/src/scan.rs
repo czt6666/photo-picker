@@ -194,8 +194,9 @@ pub fn scan_root(root: &Path, stars: &StarStore) -> Vec<Folder> {
             return true;
         }
         let name = e.file_name().to_string_lossy();
-        // 把整个用户目录加进来时，别去扫 ~/Library（里面成千上万的缓存小图）
-        if name == "Library" && home.as_deref() == e.path().parent() {
+        // 把整个用户目录加进来时，别去扫系统/应用的数据目录（里面成千上万的缓存小图）：
+        // macOS 是 ~/Library，Windows 是 %USERPROFILE%\AppData
+        if HOME_DATA_DIRS.contains(&name.as_ref()) && home.as_deref() == e.path().parent() {
             return false;
         }
         !skip_dir(&name)
@@ -274,8 +275,19 @@ pub fn list_folder(dir: &Path, stars: &StarStore) -> std::io::Result<Vec<Photo>>
     Ok(photos)
 }
 
+/// 用户主目录下不该扫描的数据目录
+#[cfg(windows)]
+const HOME_DATA_DIRS: &[&str] = &["AppData"];
+#[cfg(not(windows))]
+const HOME_DATA_DIRS: &[&str] = &["Library"];
+
 fn dirs_home() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(PathBuf::from)
+    // Windows 上一般没有 HOME，用户目录在 USERPROFILE（C:\Users\<名字>）
+    #[cfg(windows)]
+    let var = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME"));
+    #[cfg(not(windows))]
+    let var = std::env::var_os("HOME");
+    var.map(PathBuf::from)
 }
 
 #[cfg(test)]

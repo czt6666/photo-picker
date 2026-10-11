@@ -84,14 +84,25 @@ pub struct ExportResult {
     pub cancelled: bool,
 }
 
-/// 文件名里不允许出现的字符（子文件夹名由用户输入）。
+/// 把用户输入的子文件夹名清理成各平台都合法的文件名。
+/// 按最严格的 Windows 规则来（导出的文件夹可能拷到 Windows / U 盘上）：
+/// 不能含 `<>:"/\|?*` 和控制字符，不能以点或空格结尾，不能叫 CON、NUL、COM1 这类设备名。
 fn sanitize(name: &str) -> String {
-    name.chars()
-        .map(|c| if matches!(c, '/' | '\\' | ':' | '\0') { '_' } else { c })
-        .collect::<String>()
-        .trim()
-        .trim_matches('.')
-        .to_string()
+    let s = name
+        .chars()
+        .map(|c| if matches!(c, '/' | '\\' | ':' | '<' | '>' | '"' | '|' | '?' | '*') || c.is_control() { '_' } else { c })
+        .collect::<String>();
+    let s = s.trim().trim_matches('.').trim().to_string();
+    let stem = s.split('.').next().unwrap_or("").trim_end().to_ascii_uppercase();
+    let reserved = matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || (stem.len() == 4
+            && (stem.starts_with("COM") || stem.starts_with("LPT"))
+            && stem.as_bytes()[3].is_ascii_digit());
+    if reserved {
+        format!("{s}_")
+    } else {
+        s
+    }
 }
 
 /// 已被占用的“组名”（规范化：NFC + 小写，因为 macOS 默认的 APFS 不区分大小写）。
@@ -366,6 +377,18 @@ mod tests {
         let m1 = fs::metadata(&p1).unwrap().modified().unwrap();
         let m2 = fs::metadata(out.path().join("IMG_1 (1).jpg")).unwrap().modified().unwrap();
         assert_eq!(m1, m2, "保留修改时间");
+    }
+
+    #[test]
+    fn sanitize_follows_windows_rules() {
+        assert_eq!(sanitize("精选/../2024"), "精选_.._2024");
+        assert_eq!(sanitize(r#"a<b>c:"d|e?f*g"#), "a_b_c__d_e_f_g");
+        assert_eq!(sanitize("  旅行.  "), "旅行");
+        assert_eq!(sanitize("con"), "con_");
+        assert_eq!(sanitize("COM1.jpg"), "COM1.jpg_");
+        assert_eq!(sanitize("COMA"), "COMA");
+        assert_eq!(sanitize("Console"), "Console");
+        assert_eq!(sanitize("a\tb"), "a_b");
     }
 
     #[test]

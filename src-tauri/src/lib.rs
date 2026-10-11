@@ -292,7 +292,9 @@ impl AppState {
             return Err(format!("文件夹不存在：{}", p.display()));
         }
         let dir = p.to_string_lossy().trim_end_matches(['/', '\\']).to_string();
-        if dir.is_empty() {
+        // 整个磁盘：macOS/Linux 的 `/` 去掉斜杠后是空串；Windows 的 `C:\` 去掉后剩 `C:`
+        // （`C:` 在 Windows 上是“C 盘的当前目录”，不是盘根，更不能用）
+        if dir.is_empty() || dir.ends_with(':') {
             return Err("请选择具体的照片文件夹，而不是整个磁盘".into());
         }
         // 通过校验了：用票号推高代数，作废更早的切换和正在进行的重扫（fetch_max：比我晚到的有效请求已推得更高时，我自己作废）
