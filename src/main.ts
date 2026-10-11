@@ -264,33 +264,17 @@ function starTargets(): Photo[] {
   return i >= 0 ? [store.visible[i]] : [];
 }
 
-/** 像 Picasa 一样：选中的照片里只要有没加星的，就全部加星；否则全部取消。 */
-function toggleStar(photos: Photo[]): Promise<void> {
-  const plan = planToggle(photos);
-  return writeRating(plan.changed, plan.rating);
-}
-
-/** 数字键 1～5：标成几星；已经全是这个星级时再按一次 = 取消 */
-function rate(photos: Photo[], n: number): Promise<void> {
-  const plan = planRate(photos, n);
-  return writeRating(plan.changed, plan.rating);
-}
-
-/** 把 changed 里的照片写成 rating 星（0 = 取消星标） */
-async function writeRating(changed: Photo[], rating: number): Promise<void> {
+/** 像 Picasa 一样：选中的照片里只要有没加星的，就全部加星；否则全部取消。（相当于 Lightroom 的“选取”，不动星级） */
+async function toggleStar(photos: Photo[]): Promise<void> {
+  const { starred: target, changed } = planToggle(photos);
   if (!changed.length) return;
-  const target = rating > 0;
-  const before = new Map(changed.map((p) => [p, p.rating]));
   // 先改界面（乐观更新），写盘失败再改回来：按下 S 的瞬间就要看到星星
-  changed.forEach((p) => {
-    p.rating = rating;
-    p.starred = target;
-  });
+  changed.forEach((p) => (p.starred = target));
   grid.refreshCells();
   viewer.refreshStar();
   updateStatus();
   const paths = changed.map((p) => p.path);
-  const job = store.queueStarWrite(() => api.setRating(paths, rating));
+  const job = store.queueStarWrite(() => api.setStar(paths, target));
   try {
     const r = await job;
     for (const [dir, n] of Object.entries(r.folders)) {
@@ -309,14 +293,35 @@ async function writeRating(changed: Photo[], rating: number): Promise<void> {
   } catch (e) {
     // 只回滚“还停留在这次设置的状态”的照片（之后又被改过的以后来的为准）
     changed.forEach((p) => {
-      if (p.rating !== rating) return;
-      p.rating = before.get(p) ?? 0;
-      p.starred = p.rating > 0;
+      if (p.starred === target) p.starred = !target;
     });
     grid.refreshCells();
     viewer.refreshStar();
     updateStatus();
     toast(`星标保存失败：${e}`, 'error', 4000);
+  }
+}
+
+/** 星级（Lightroom 的星级）：数字键 1～5 标成几星，已经全是这个星级时再按一次 = 清除；0 = 清除。不动星标。 */
+async function rate(photos: Photo[], n: number): Promise<void> {
+  const { rating, changed } = planRate(photos, n);
+  if (!changed.length) return;
+  const before = new Map(changed.map((p) => [p, p.rating]));
+  changed.forEach((p) => (p.rating = rating));
+  grid.refreshCells();
+  viewer.refreshStar();
+  const paths = changed.map((p) => p.path);
+  // 和星标写同一个 .picasa.ini，排同一个队
+  try {
+    const fallback = await store.queueStarWrite(() => api.setRating(paths, rating));
+    if (fallback) toast('照片所在文件夹不可写，星级已保存在本机的 App 数据里', 'warn', 4000);
+  } catch (e) {
+    changed.forEach((p) => {
+      if (p.rating === rating) p.rating = before.get(p) ?? 0;
+    });
+    grid.refreshCells();
+    viewer.refreshStar();
+    toast(`星级保存失败：${e}`, 'error', 4000);
   }
 }
 
@@ -538,8 +543,8 @@ const HELP = [
   [modKey('A'), '全选'],
   ['回车、双击', '看大图'],
   ['一直往下滚', '接着看下一个相册（中间有分界线）'],
-  [`空格（或 S、${modKey('8')}）`, '加 / 取消星标（多选时：有未加星的就全部加星）'],
-  ['1 ～ 5', '标成 1～5 星（再按一次同样的数字 = 取消）；筛选、导出只看有没有星'],
+  [`空格（或 S、${modKey('8')}）`, '加 / 取消星标，相当于 Lightroom 的“选取”（多选时：有未加星的就全部加星）'],
+  ['1 ～ 5、0', '星级：标成 1～5 星（再按一次同样的数字，或按 0 = 清除）。和星标互不影响'],
   ['Shift+S', '星标筛选开 / 关（同点侧栏“已加星标的照片”）'],
   [modKey('E'), '导出'],
   [modKey('F'), '搜索文件名'],
@@ -548,7 +553,7 @@ const HELP = [
   ['看大图', ''],
   ['滚轮、← →', '上一张 / 下一张'],
   [`空格（或 S、${modKey('8')}）`, '加 / 取消星标'],
-  ['1 ～ 5', '标成 1～5 星'],
+  ['1 ～ 5、0', '星级：标成 1～5 星 / 清除'],
   ['Z、双击', '适合窗口 ↔ 1:1 实际像素'],
   [`捏合 / ${MOD_NAME}+滚轮`, `缩放；放大后拖动或 ${isMac ? '⌥' : 'Alt'}+滚动平移，翻页时保持放大倍数和位置`],
   ['F', '全屏'],
@@ -643,7 +648,7 @@ window.addEventListener('keydown', (e) => {
     return;
   }
   // 按住空格/S 不放时系统会自动连发按键：星标只认第一下，否则会一闪一闪地反复切换
-  const isRateKey = !mod && k.length === 1 && k >= '1' && k <= '5';
+  const isRateKey = !mod && k.length === 1 && k >= '0' && k <= '5';
   const isStarKey = k === ' ' || k === 's' || k === 'S' || (mod && k === '8') || isRateKey;
   if (isStarKey && e.repeat) {
     e.preventDefault();

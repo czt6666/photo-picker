@@ -31,7 +31,7 @@
 
       <footer class="statusbar">
         <span id="status-count" class="status"></span>
-        <button id="btn-star" class="btn" title="给选中的照片加/取消星标（空格）；1～5 = 标成几星">☆ 星标</button>
+        <button id="btn-star" class="btn" title="给选中的照片加/取消星标（空格）">☆ 星标</button>
         <span id="status-thumbs" class="status dim"></span>
         <div class="spacer"></div>
         <label class="zoom" title="缩略图大小">
@@ -48,7 +48,8 @@
           <div class="v-title"><span class="v-name"></span><span class="v-pos dim"></span></div>
           <div class="v-actions">
             <button class="btn v-zoom" title="适合窗口 ↔ 1:1 实际像素（Z 或双击）">1:1</button>
-            <button class="btn v-star" title="加/取消星标（空格）；1～5 = 标成几星">☆ 星标</button>
+            <span class="v-rate" title="星级（1～5，0 清除）"><button data-n="1">★</button><button data-n="2">★</button><button data-n="3">★</button><button data-n="4">★</button><button data-n="5">★</button></span>
+            <button class="btn v-star" title="加/取消星标（空格）">☆ 星标</button>
             <button class="btn v-full" title="全屏（F）">⛶</button>
           </div>
         </div>

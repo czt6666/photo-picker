@@ -472,6 +472,20 @@ body.resizing * {
   background: rgba(0, 0, 0, 0.6);
   pointer-events: none;
 }
+/* 星级：右下角一排小星星。白色，和左下角金色的星标区分开 */
+.rate {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  padding: 0 4px;
+  border-radius: 3px;
+  font-size: 9px;
+  line-height: 14px;
+  letter-spacing: 0.05em;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.6);
+  pointer-events: none;
+}
 .cell.starred .badge {
   opacity: 1;
   color: var(--star);
@@ -602,6 +616,26 @@ body.drop-target .content::after {
 .v-main {
   z-index: 1;
 }
+/* 看大图顶栏的五颗星：星级 */
+.v-rate {
+  display: inline-flex;
+  align-items: center;
+}
+.v-rate button {
+  border: none;
+  background: none;
+  padding: 0 1px;
+  font-size: 15px;
+  line-height: 1;
+  color: rgba(255, 255, 255, 0.25);
+  cursor: pointer;
+}
+.v-rate button.on {
+  color: #fff;
+}
+.v-rate button:hover {
+  color: var(--accent);
+}
 .v-starmark {
   position: absolute;
   left: 18px;
@@ -614,15 +648,6 @@ body.drop-target .content::after {
 }
 .v-starmark.pop {
   animation: pop 0.35s ease-out;
-}
-/* 2 星以上：角标里带数字，变成胶囊形 */
-.cell.rated .badge {
-  width: auto;
-  padding: 0 6px;
-  border-radius: 11px;
-  font-size: 12px;
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
 }
 @keyframes pop {
   0% {

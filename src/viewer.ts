@@ -28,7 +28,7 @@ const MAX_SCALE = 8;
 export interface ViewerCallbacks {
   close(lastPath: string | null): void;
   toggleStar(photos: Photo[]): Promise<void>;
-  /** 数字键 1～5：标成几星 */
+  /** 数字键：1～5 标成几星，0 清除 */
   rate(photos: Photo[], rating: number): Promise<void>;
 }
 
@@ -90,6 +90,8 @@ export class Viewer {
   private starBtn: HTMLButtonElement;
   private zoomBtn: HTMLButtonElement;
   private starMark: HTMLElement;
+  /** 顶栏的五颗星：显示 / 点击设置星级 */
+  private rateEl: HTMLElement;
   private errorEl: HTMLElement;
 
   constructor(
@@ -110,6 +112,11 @@ export class Viewer {
 
     $('.v-back').addEventListener('click', () => this.close());
     this.starBtn.addEventListener('click', () => this.toggleStar());
+    this.rateEl = $('.v-rate');
+    this.rateEl.addEventListener('click', (e) => {
+      const n = Number((e.target as HTMLElement).closest<HTMLElement>('button')?.dataset.n);
+      if (n) void this.rate(n);
+    });
     this.zoomBtn.addEventListener('click', () => this.toggleActualSize());
     $('.v-full').addEventListener('click', () => this.toggleFullscreen());
 
@@ -181,10 +188,10 @@ export class Viewer {
   refreshStar(): void {
     const p = this.current;
     if (!p) return;
-    this.starBtn.textContent = p.rating > 1 ? `★ ${p.rating} 星` : p.starred ? '★ 已加星标' : '☆ 星标';
+    this.starBtn.textContent = p.starred ? '★ 已加星标' : '☆ 星标';
     this.starBtn.classList.toggle('on', p.starred);
     this.starMark.hidden = !p.starred;
-    this.starMark.textContent = '★'.repeat(Math.max(1, p.rating));
+    this.rateEl.querySelectorAll('button').forEach((b) => b.classList.toggle('on', Number(b.dataset.n) <= p.rating));
     this.strip.refresh();
   }
 
@@ -229,19 +236,18 @@ export class Viewer {
       case 'Backspace':
         this.close();
         return true;
+      case '0':
       case '1':
       case '2':
       case '3':
       case '4':
       case '5':
-        void this.toggleStar(Number(k));
+        // 星级：1～5 标成几星，0 清除
+        void this.rate(Number(k));
         return true;
       case 'z':
       case 'Z':
         this.toggleActualSize();
-        return true;
-      case '0':
-        this.fit();
         return true;
       case '=':
       case '+':
@@ -666,11 +672,17 @@ export class Viewer {
     this.stage.classList.remove('dragging');
   }
 
-  /** 不带参数 = 加 / 取消星标；带 1～5 = 标成几星 */
-  private async toggleStar(rating?: number): Promise<void> {
+  private async rate(n: number): Promise<void> {
     const p = this.current;
     if (!p) return;
-    await (rating ? this.cb.rate([p], rating) : this.cb.toggleStar([p]));
+    await this.cb.rate([p], n);
+    this.refreshStar();
+  }
+
+  private async toggleStar(): Promise<void> {
+    const p = this.current;
+    if (!p) return;
+    await this.cb.toggleStar([p]);
     this.refreshStar();
     this.starMark.classList.remove('pop');
     void this.starMark.offsetWidth; // 重启动画
