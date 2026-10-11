@@ -29,6 +29,9 @@ const grid = new Grid(gridEl, $('grid-inner'), {
   open: (i) => openViewer(i),
   toggleStar: (photos) => void toggleStar(photos),
   selectionChanged: () => updateStatus(),
+  sectionName: (dir) => store.folder(dir)?.name ?? baseName(dir),
+  sectionChanged: (dir) => onSectionAtTop(dir),
+  nearEnd: () => void loadNextAlbum(),
 });
 
 const viewer = new Viewer($('viewer'), {
@@ -90,6 +93,9 @@ async function showView(view: View, load: () => Promise<Photo[]>): Promise<boole
     return false;
   }
   if (seq !== viewSeq) return true; // 用户已经点了别的文件夹
+  chain = view.kind === 'folder' ? [view.path] : [];
+  chainEnded = false;
+  lastChunk = photos;
   store.setPhotos(view, photos);
   if (view.kind === 'folder') lastFolder = view.path;
   if (store.library.workdir) prefs.set(`lastView:${store.library.workdir}`, view);
@@ -107,10 +113,69 @@ const openStarred = () => showView({ kind: 'starred' }, () => api.listStarred())
 
 function showEmptyView(): void {
   ++viewSeq; // 让还在路上的旧相册加载结果作废
+  chain = [];
   store.setPhotos({ kind: 'none' }, []);
   sidebar.render();
   grid.reset();
   renderChrome();
+}
+
+// ---------------------------------------------------------------------------
+// 连续翻动：往下滚到当前相册的末尾，下一个相册接着出现（中间一条分界线），不用回侧栏去点。
+// 顺序就是侧栏里的顺序；星标筛选开着时只接有星标的相册。
+// ---------------------------------------------------------------------------
+
+/** 已经显示在网格里的相册，按顺序：第一个是点开的那个，后面是滚动时接上来的 */
+let chain: string[] = [];
+let chainBusy = false;
+/** 接下一个相册失败了：这个视图里不再重试，免得一直转 */
+let chainEnded = false;
+/** 最近接上来的那批照片：预生成缩略图时连它一起发（后端每次调用会替换掉上一批排队） */
+let lastChunk: Photo[] = [];
+
+function nextAlbumPath(): string | null {
+  const v = store.view;
+  // 搜索时只在已经显示的相册里找，不往后接（否则没有结果时会把整个工作目录读一遍）
+  if (v.kind !== 'folder' || store.query.trim() || !chain.length) return null;
+  const list = v.starredOnly ? store.library.folders.filter((f) => f.starred > 0 || chain.includes(f.path)) : store.library.folders;
+  const i = list.findIndex((f) => f.path === chain[chain.length - 1]);
+  return i >= 0 ? (list[i + 1]?.path ?? null) : null;
+}
+
+async function loadNextAlbum(): Promise<void> {
+  if (chainBusy || chainEnded) return;
+  const path = nextAlbumPath();
+  if (!path) return;
+  const seq = viewSeq;
+  chainBusy = true;
+  try {
+    await store.starsSettled();
+    const photos = await api.listFolder(path);
+    if (seq !== viewSeq) return; // 期间换了视图
+    chain.push(path);
+    store.appendPhotos(photos);
+    grid.extend();
+    updateStatus();
+    void api.prefetchThumbs([...lastChunk, ...photos].map((p) => p.path)).catch(() => {});
+    lastChunk = photos;
+  } catch {
+    if (seq === viewSeq) chainEnded = true;
+  } finally {
+    chainBusy = false;
+    grid.poke(); // 接上来的相册太短、还没填满视口，或者期间换了视图：再检查一次
+  }
+}
+
+/** 滚动后视口最上面换了相册：侧栏高亮、顶栏标题、状态栏都跟着换 */
+function onSectionAtTop(dir: string): void {
+  const v = store.view;
+  if (v.kind !== 'folder' || v.path === dir || !chain.includes(dir)) return;
+  store.view = { ...v, path: dir };
+  lastFolder = dir;
+  if (store.library.workdir) prefs.set(`lastView:${store.library.workdir}`, store.view);
+  sidebar.render();
+  renderTitle();
+  updateStatus();
 }
 
 function openViewer(i: number): void {
@@ -119,6 +184,12 @@ function openViewer(i: number): void {
 }
 
 function renderChrome(): void {
+  renderTitle();
+  renderEmpty();
+  updateStatus();
+}
+
+function renderTitle(): void {
   const v = store.view;
   if (v.kind === 'folder') {
     const f = store.folder(v.path);
@@ -129,8 +200,6 @@ function renderChrome(): void {
   } else {
     titleEl.textContent = '';
   }
-  renderEmpty();
-  updateStatus();
 }
 
 function renderEmpty(): void {
@@ -161,8 +230,12 @@ function renderEmpty(): void {
 }
 
 function updateStatus(): void {
-  const total = store.visible.length;
-  const starred = store.visible.filter((p) => p.starred).length;
+  // 连续翻动时列表里接着好几个相册，张数只报正在看的那个
+  const v = store.view;
+  const sec = v.kind === 'folder' ? store.sections.find((s) => s.dir === v.path) : undefined;
+  const shown = sec ? store.visible.slice(sec.start, sec.start + sec.count) : store.visible;
+  const total = shown.length;
+  const starred = shown.filter((p) => p.starred).length;
   const sel = store.selection.size;
   let s = store.view.kind === 'none' ? '' : `${total} 张照片`;
   if (starred && !isStarMode(store.view)) s += `  ·  ★ ${starred}`;
@@ -445,6 +518,7 @@ const HELP = [
   [`${MOD_NAME} 点击、Shift 点击`, '多选 / 范围选择'],
   [modKey('A'), '全选'],
   ['回车、双击', '看大图'],
+  ['一直往下滚', '接着看下一个相册（中间有分界线）'],
   [`空格（或 S、${modKey('8')}）`, '加 / 取消星标（多选时：有未加星的就全部加星）'],
   ['Shift+S', '星标筛选开 / 关（同点侧栏“已加星标的照片”）'],
   [modKey('E'), '导出'],

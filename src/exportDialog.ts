@@ -36,7 +36,9 @@ export function openExportDialog(): void {
   const el = document.getElementById('export-dialog')!;
   const p = prefs.get<ExportPrefs>('export', { dest: '', mode: 'original', maxPx: 2048, quality: 90 });
   const workdirAtOpen = store.library.workdir;
-  const viewStarred = store.all.filter((x) => x.starred);
+  // 连续翻动时列表里接着好几个相册，“当前文件夹”只算正在看的那个
+  const v = store.view;
+  const viewStarred = store.all.filter((x) => x.starred && (v.kind !== 'folder' || x.dir === v.path));
   const selected = store.selectedPhotos();
   const allStarred = store.totalStarred();
   const inStarredView = store.view.kind === 'starred';

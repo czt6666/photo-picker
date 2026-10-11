@@ -347,6 +347,36 @@ body.resizing * {
   position: relative;
   width: 100%;
 }
+/* 连续翻动时相册之间的分界线：相册名 + 张数 + 一条横线 */
+.sec-head {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 0 14px 8px;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.sec-head::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  margin-bottom: 7px;
+  background: var(--border);
+}
+.sec-name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sec-count {
+  color: var(--text-dim);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
 .cell {
   position: absolute;
   left: 0;
