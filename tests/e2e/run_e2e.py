@@ -232,13 +232,15 @@ def run(d, env, export_dir):
     hits = [p for p in perf if p["cached"]]
     check("正常节奏翻页：下一张已被预加载，命中率高", len(hits) >= 6, f"{len(hits)}/{len(perf)} 命中，耗时 {[p['ms'] for p in perf]}ms")
 
-    # 快速连续滚 10 格（间隔 40ms）：每格都算数、不卡死、停下后清晰图出现
+    # 快速连续滚 10 格（间隔 40ms）：手快甩出的连击会被压缩（每 90ms 最多一张），不卡死、停下后清晰图出现
     t0 = time.time()
     xdo(env, "click", "--repeat", "10", "--delay", "40", "5")  # 一次调用发 10 格，避免每次启动 xdotool 的 ~100ms 开销
     t_scroll = time.time() - t0
-    ok = wait(lambda: js(d, "const m = document.querySelector('.v-main'); return !!(m && m.isConnected && m.naturalWidth && document.querySelector('.v-pos').textContent.startsWith('19 /'))"), timeout=20)
+    time.sleep(0.3)
     pos = d.find_element(By.CSS_SELECTOR, ".v-pos").text
-    check("快速连滚 10 格 → 到第 19 张，停下后清晰图出现", ok, f"停在 {pos}，滚动 {t_scroll:.2f}s，停下后 {time.time() - t0 - t_scroll:.2f}s 出清晰图")
+    n = int(pos.split("/")[0])
+    ok = 12 <= n <= 19 and wait(lambda: js(d, "const m = document.querySelector('.v-main'); return !!(m && m.isConnected && m.naturalWidth)"), timeout=20)
+    check("快速连滚 10 格 → 往后翻了 3~10 张，停下后清晰图出现", ok, f"停在 {pos}，滚动 {t_scroll:.2f}s，停下后 {time.time() - t0 - t_scroll:.2f}s 出清晰图")
 
     # 竖拍（EXIF 方向 6）显示为竖图
     js(d, "document.querySelector('.v-strip-inner .s-item[data-i=\"4\"]')?.click()")

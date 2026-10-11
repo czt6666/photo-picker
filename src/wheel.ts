@@ -1,40 +1,55 @@
 // 把滚轮/触控板事件翻译成“上一张 / 下一张”。
 //
-// 难点在于两种设备的事件长得完全不一样：
-// - 鼠标滚轮：一格（一个“咔哒”）一个事件，delta 较大，间隔几十毫秒。用户期望一格 = 一张。
-// - 触控板：一次滑动产生几十个小 delta 的事件（60~120Hz），手指离开后还有一串逐渐衰减的
-//   “惯性”事件。若按事件数翻页，轻轻一划就飞过去二三十张；若简单节流，又会显得迟钝。
+// 两种设备送来的事件长得完全不一样：
+// - 鼠标滚轮：一格（一个“咔哒”）一个事件，事件之间隔几十到几百毫秒。
+//   macOS 还会给滚轮加速：转得越快，每格报的 delta 越大（慢转一格 4px，猛转一格能到几百 px）。
+// - 触控板：手指在板上时按屏幕刷新率（60~120Hz，即每 8~16ms）连续送来一串小 delta；
+//   手指离开后系统继续送一串逐渐变小的“惯性”事件，模拟甩出去的滑行。
+//
+// 网页里拿不到“这是鼠标还是触控板”的标记（WebKit 不暴露），只能从事件本身判断。
+// 最可靠的线索是**事件之间的间隔**：触控板的事件一个紧挨一个（≤16ms，偶尔掉帧 33ms），
+// 而鼠标滚轮哪怕连着转，格与格之间通常也隔着几十毫秒以上。
 //
 // 策略：
-// 1. 手势开头立即翻一张（不管什么设备，第一下都零延迟响应）；
-// 2. 认出是滚轮的格子事件，后续每格翻一张（最短间隔 discreteIntervalMs 防止抖动）；
-// 3. 触控板事件累计位移，每满 stepPx 翻一张，且两次翻页至少隔 minIntervalMs；
-// 4. 翻页后若 delta 持续单调变小 → 判定为惯性滑行，不再累计，直到用户再次发力或停下。
+// 1. “独立的一下”——距上个事件超过 notchGapMs，或换了方向，或按行/按页滚动：
+//    立即翻一张（零延迟），但两次翻页至少隔 notchIntervalMs。
+//    效果：慢慢拨一格就是一张；手快一下甩出好几格，多出来的会被吞掉，不再“一不小心飞过去”。
+// 2. 连续事件流——按滑动距离翻页，每满 stepPx 翻一张，两次至少隔 streamIntervalMs。
+//    手指一直在推就一直翻，速度跟着手走；距离不往后“攒存货”，手一停就停。
+// 3. 惯性滑行（delta 连续变小）只按 momentumWeight 折算距离：甩一下会多滑一两张，但不会飞。
 
 export interface WheelSample {
   deltaX: number;
   deltaY: number;
   deltaMode: number;
   timeStamp: number;
-  /** 非标准属性：WebKit/Chromium 上鼠标滚轮每格为 ±120 的倍数 */
-  wheelDeltaY?: number;
 }
 
 export interface WheelOptions {
-  gapMs: number;
+  /** 距上个事件超过它 = 一个“独立的一下”（鼠标的一格，或触控板手势的开头） */
+  notchGapMs: number;
+  /** “独立的一下”之间最短的翻页间隔 */
+  notchIntervalMs: number;
+  /** 连续事件流里，每滑多少像素翻一张 */
   stepPx: number;
-  minIntervalMs: number;
-  discreteIntervalMs: number;
-  /** 连续多少个不增大的 delta 视为惯性 */
-  decayEvents: number;
+  /** 连续事件流里最短的翻页间隔（≈ 每秒最多翻 1000/它 张） */
+  streamIntervalMs: number;
+  /** 单个事件最多算多少像素，压住 macOS 滚轮加速报出来的超大 delta */
+  maxEventPx: number;
+  /** delta 中途不变大、累计变小多少次视为惯性滑行 */
+  momentumEvents: number;
+  /** 惯性滑行的距离按多少折算 */
+  momentumWeight: number;
 }
 
 const DEFAULTS: WheelOptions = {
-  gapMs: 180,
-  stepPx: 140,
-  minIntervalMs: 110,
-  discreteIntervalMs: 30,
-  decayEvents: 3,
+  notchGapMs: 40,
+  notchIntervalMs: 90,
+  stepPx: 100,
+  streamIntervalMs: 70,
+  maxEventPx: 60,
+  momentumEvents: 5,
+  momentumWeight: 0.35,
 };
 
 export class WheelStepper {
@@ -44,7 +59,7 @@ export class WheelStepper {
   private dir = 0;
   private acc = 0;
   private prevMag = 0;
-  private decay = 0;
+  private falling = 0;
 
   constructor(opts: Partial<WheelOptions> = {}) {
     this.opts = { ...DEFAULTS, ...opts };
@@ -52,6 +67,7 @@ export class WheelStepper {
 
   reset(): void {
     this.lastT = -Infinity;
+    this.lastStepT = -Infinity;
     this.dir = 0;
   }
 
@@ -68,44 +84,33 @@ export class WheelStepper {
     const t = e.timeStamp;
     const gap = t - this.lastT;
     this.lastT = t;
+    const turned = dir !== this.dir;
+    this.dir = dir;
 
-    // 新手势：停顿过，或者换了方向
-    if (gap > o.gapMs || dir !== this.dir) {
-      this.dir = dir;
+    // 1. 独立的一下
+    if (turned || gap >= o.notchGapMs || e.deltaMode !== 0) {
       this.acc = 0;
       this.prevMag = mag;
-      this.decay = 0;
-      this.lastStepT = t;
-      return dir;
-    }
-
-    if (isDiscrete(e)) {
-      if (t - this.lastStepT >= o.discreteIntervalMs) {
+      this.falling = 0;
+      if (turned || t - this.lastStepT >= o.notchIntervalMs) {
         this.lastStepT = t;
         return dir;
       }
       return 0;
     }
 
-    // 触控板：识别惯性
-    this.decay = mag <= this.prevMag ? this.decay + 1 : 0;
+    // 2. 连续事件流（触控板，或鼠标转得飞快）
+    // 惯性的 delta 只减不增（尾巴上会有几个相等的值）；手指在推时总会时不时变大一下
+    if (mag > this.prevMag) this.falling = 0;
+    else if (mag < this.prevMag) this.falling++;
     this.prevMag = mag;
-    if (this.decay >= o.decayEvents) {
-      this.acc = 0;
-      return 0;
-    }
-    this.acc += mag;
-    if (this.acc >= o.stepPx && t - this.lastStepT >= o.minIntervalMs) {
+    const weight = this.falling >= o.momentumEvents ? o.momentumWeight : 1;
+    this.acc = Math.min(o.stepPx, this.acc + Math.min(mag, o.maxEventPx) * weight);
+    if (this.acc >= o.stepPx && t - this.lastStepT >= o.streamIntervalMs) {
       this.acc = 0;
       this.lastStepT = t;
       return dir;
     }
     return 0;
   }
-}
-
-function isDiscrete(e: WheelSample): boolean {
-  if (e.deltaMode !== 0) return true;
-  const w = e.wheelDeltaY;
-  return typeof w === 'number' && w !== 0 && w % 120 === 0;
 }
