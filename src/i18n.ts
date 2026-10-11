@@ -16,10 +16,12 @@ export const LANGS: { id: Lang; label: string }[] = [
 
 const systemLang = (): Lang => (/^zh\b/i.test(navigator.language || '') ? 'zh' : 'en');
 
-export const lang: Lang = prefs.get<Lang | null>('lang', null) ?? systemLang();
+/** 用户在设置里选的语言；null = 跟随系统 */
+export const langPref: Lang | null = prefs.get<Lang | null>('lang', null);
+export const lang: Lang = langPref ?? systemLang();
 
-export function setLang(l: Lang): void {
-  if (l === lang) return;
+export function setLang(l: Lang | null): void {
+  if (l === langPref) return;
   prefs.set('lang', l);
   location.reload();
 }
@@ -138,6 +140,8 @@ export const EN: Record<string, string> = {
   在访达中显示: 'Show in Finder',
   在资源管理器中显示: 'Show in Explorer',
   语言: 'Language',
+  设置: 'Settings',
+  跟随系统: 'System',
 
   // ---- 快捷键帮助 ----
   快捷键: 'Shortcuts',
@@ -172,23 +176,18 @@ export const EN: Record<string, string> = {
   导出照片: 'Export photos',
   范围: 'Photos',
   当前相册的星标: 'Starred in this album',
+  星标照片: 'Starred photos',
   选中的: 'Selected',
-  全部星标: 'All starred',
   导出到: 'To',
   '选择…': 'Choose…',
   子文件夹: 'Subfolder',
   可留空: 'optional',
   '{name} 精选': '{name} picks',
-  尺寸: 'Size',
-  原图: 'Original',
-  '缩小：长边': 'Resize: long edge',
-  '像素，质量': 'px, quality',
   带上同名的: 'Include matching',
   取消: 'Cancel',
   选择导出文件夹: 'Choose export folder',
   '工作目录已切换，请重新打开': 'Folder changed. Reopen this dialog.',
   没有可导出的照片: 'Nothing to export',
-  '读取星标失败：{e}': 'Could not read stars: {e}',
   停止: 'Stop',
   '准备导出 {n} 张…': 'Preparing {n}…',
   '已导出 {n} 张': 'Exported {n}',

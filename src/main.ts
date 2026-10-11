@@ -11,7 +11,7 @@ import { baseName, makeSidebarResizable, Sidebar } from './sidebar';
 import { planRate, planToggle } from './rating';
 import { isStarMode, prefs, store, type View } from './store';
 import type { Library, Photo, Progress } from './types';
-import { LANGS, lang, setLang, t, translateDom } from './i18n';
+import { LANGS, langPref, setLang, t, translateDom, type Lang } from './i18n';
 import { closeMenu, contextMenu, esc, toast } from './ui';
 import { formatBytes, Viewer } from './viewer';
 import { isBrowserShortcut, isMac, mod as modKey, MOD_NAME, REVEAL_LABEL } from './platform';
@@ -552,6 +552,7 @@ const HELP = (): string[][] => [
   [modKey('E'), t('导出')],
   [modKey('F'), t('搜索文件名')],
   [modKey('O'), t('选择 / 切换文件夹')],
+  [modKey(','), t('设置')],
   [t('捏合、{mod}+滚轮', { mod: MOD_NAME }), t('缩略图大小')],
   [t('看大图时'), ''],
   [t('滚轮、← →'), t('上一张 / 下一张')],
@@ -566,21 +567,39 @@ const HELP = (): string[][] => [
 
 function showHelp(): void {
   const el = $('export-dialog');
-  const langs = LANGS.map((l) => `<option value="${l.id}" ${l.id === lang ? 'selected' : ''}>${l.label}</option>`).join('');
   el.innerHTML = `<div class="modal-card help"><h2>${t('快捷键')}</h2><table>${HELP().map(([k, v]) =>
     v ? `<tr><td><kbd>${esc(k)}</kbd></td><td>${esc(v)}</td></tr>` : `<tr><th colspan="2">${esc(k)}</th></tr>`,
-  ).join('')}</table><div class="actions"><label class="lang">${t('语言')} <select class="input">${langs}</select></label>
-    <span class="spacer"></span><button class="btn primary">${t('知道了')}</button></div></div>`;
+  ).join('')}</table><div class="actions"><button class="btn primary">${t('知道了')}</button></div></div>`;
   el.hidden = false;
   const close = () => {
     el.hidden = true;
     el.innerHTML = '';
   };
   el.querySelector('button')!.addEventListener('click', close);
-  el.querySelector('select')!.addEventListener('change', (e) => setLang((e.target as HTMLSelectElement).value as typeof lang));
   el.onclick = (e) => e.target === el && close();
 }
 $('btn-help').addEventListener('click', showHelp);
+
+/** 设置：目前只有语言。和快捷键帮助共用一个弹层 */
+function showSettings(): void {
+  const el = $('export-dialog');
+  const opts = [{ id: '', label: t('跟随系统') }, ...LANGS]
+    .map((l) => `<option value="${l.id}" ${l.id === (langPref ?? '') ? 'selected' : ''}>${esc(l.label)}</option>`)
+    .join('');
+  el.innerHTML = `<div class="modal-card help settings"><h2>${t('设置')}</h2>
+    <div class="field"><label class="lang">${t('语言')} <select class="input">${opts}</select></label></div>
+    <div class="actions"><button class="btn primary">${t('关闭')}</button></div></div>`;
+  el.hidden = false;
+  const close = () => {
+    el.hidden = true;
+    el.innerHTML = '';
+  };
+  el.querySelector('button')!.addEventListener('click', close);
+  el.querySelector('select')!.addEventListener('change', (e) => setLang(((e.target as HTMLSelectElement).value || null) as Lang | null));
+  el.onclick = (e) => e.target === el && close();
+}
+$('btn-settings').addEventListener('click', showSettings);
+$('btn-settings').title = `${t('设置')}（${modKey(',')}）`;
 
 gridEl.addEventListener('contextmenu', (e) => {
   const cell = (e.target as HTMLElement).closest<HTMLElement>('.cell');
@@ -671,6 +690,7 @@ window.addEventListener('keydown', (e) => {
   else if (mod && k.toLowerCase() === 'e') openExportDialog();
   else if (mod && k.toLowerCase() === 'f') search.focus();
   else if (mod && k.toLowerCase() === 'o') void chooseWorkdir();
+  else if (mod && k === ',') showSettings();
   else if (mod) handled = false;
   else if (k === 'ArrowRight') grid.moveFocus(1, 0, e.shiftKey);
   else if (k === 'ArrowLeft') grid.moveFocus(-1, 0, e.shiftKey);

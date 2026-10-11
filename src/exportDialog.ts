@@ -6,11 +6,11 @@ import { revealItemInDir } from '@tauri-apps/plugin-opener';
 import { REVEAL_LABEL } from './platform';
 import { api } from './api';
 import { prefs, store } from './store';
-import type { ExportMode, Photo, Progress } from './types';
+import type { ExportMode, Progress } from './types';
 import { t } from './i18n';
 import { esc, toast } from './ui';
 
-type Scope = 'view-starred' | 'selected' | 'all-starred';
+type Scope = 'view-starred' | 'selected';
 
 interface ExportPrefs {
   dest: string;
@@ -20,8 +20,6 @@ interface ExportPrefs {
   /** 同时导出同名 RAW（旧版保存的偏好里没有这个字段 → 默认开） */
   withRaw?: boolean;
 }
-
-const SIZES = [1280, 1600, 2048, 2560, 3840];
 
 export function isExportOpen(): boolean {
   return !document.getElementById('export-dialog')!.hidden;
@@ -41,17 +39,13 @@ export function openExportDialog(): void {
   const v = store.view;
   const viewStarred = store.all.filter((x) => x.starred && (v.kind !== 'folder' || x.dir === v.path));
   const selected = store.selectedPhotos();
-  const allStarred = store.totalStarred();
   const inStarredView = store.view.kind === 'starred';
   const viewName = store.view.kind === 'folder' ? (store.folder(store.view.path)?.name ?? '') : '';
 
-  let scope: Scope = selected.length > 1 ? 'selected' : viewStarred.length ? 'view-starred' : 'all-starred';
-  if (inStarredView && scope === 'view-starred') scope = 'all-starred';
+  const scope: Scope = selected.length > 1 || !viewStarred.length ? 'selected' : 'view-starred';
 
-  const radio = (value: Scope, label: string, n: number, hidden = false) =>
-    hidden
-      ? ''
-      : `<label class="opt ${n ? '' : 'disabled'}"><input type="radio" name="scope" value="${value}" ${n ? '' : 'disabled'} ${
+  const radio = (value: Scope, label: string, n: number) =>
+    `<label class="opt ${n ? '' : 'disabled'}"><input type="radio" name="scope" value="${value}" ${n ? '' : 'disabled'} ${
           scope === value ? 'checked' : ''
         }> ${label} <b>${n}</b></label>`;
 
@@ -60,9 +54,8 @@ export function openExportDialog(): void {
       <h2>${t('导出照片')}</h2>
       <div class="field">
         <div class="label">${t('范围')}</div>
-        ${radio('view-starred', t('当前相册的星标'), viewStarred.length, inStarredView)}
+        ${radio('view-starred', inStarredView ? t('星标照片') : t('当前相册的星标'), viewStarred.length)}
         ${radio('selected', t('选中的'), selected.length)}
-        ${radio('all-starred', t('全部星标'), allStarred)}
       </div>
       <div class="field">
         <div class="label">${t('导出到')}</div>
@@ -74,16 +67,6 @@ export function openExportDialog(): void {
           <span class="dim">${t('子文件夹')}</span>
           <input class="input sub" placeholder="${t('可留空')}" value="${esc(viewName ? t('{name} 精选', { name: viewName }) : '')}">
         </div>
-      </div>
-      <div class="field">
-        <div class="label">${t('尺寸')}</div>
-        <label class="opt"><input type="radio" name="mode" value="original" ${p.mode === 'original' ? 'checked' : ''}>
-          ${t('原图')}</label>
-        <label class="opt"><input type="radio" name="mode" value="resize" ${p.mode === 'resize' ? 'checked' : ''}>
-          ${t('缩小：长边')}
-          <select class="input maxpx">${SIZES.map((s) => `<option value="${s}" ${s === p.maxPx ? 'selected' : ''}>${s}</option>`).join('')}</select>
-          ${t('像素，质量')} <input type="range" class="quality" min="60" max="100" step="1" value="${p.quality}"> <span class="qv">${p.quality}</span>
-        </label>
       </div>
       <div class="field">
         <label class="opt"><input type="checkbox" class="with-raw" ${p.withRaw === false ? '' : 'checked'}>
@@ -103,16 +86,12 @@ export function openExportDialog(): void {
   const $ = <T extends HTMLElement>(s: string) => el.querySelector<T>(s)!;
   const dest = $<HTMLInputElement>('.dest');
   const sub = $<HTMLInputElement>('.sub');
-  const quality = $<HTMLInputElement>('.quality');
-  const maxpx = $<HTMLSelectElement>('.maxpx');
   const go = $<HTMLButtonElement>('.go');
   const cancel = $<HTMLButtonElement>('.cancel');
   const progress = $('.progress');
   const fill = $('.fill');
   const ptext = $('.ptext');
   let running = false;
-  /** 已点“导出”、正在准备照片列表（等星标写完、读星标相册）——防止双击发出两次导出 */
-  let starting = false;
   let unlisten: (() => void) | null = null;
 
   const close = () => {
@@ -127,10 +106,6 @@ export function openExportDialog(): void {
   el.onclick = (e) => {
     if (e.target === el) close();
   };
-  quality.oninput = () => ($('.qv').textContent = quality.value);
-  maxpx.onfocus = quality.onfocus = () => {
-    el.querySelector<HTMLInputElement>('input[name=mode][value=resize]')!.checked = true;
-  };
   $('.pick').onclick = async () => {
     const picked = await openDialog({ directory: true, multiple: false, defaultPath: dest.value || undefined, title: t('选择导出文件夹') });
     if (typeof picked === 'string') dest.value = picked;
@@ -142,45 +117,23 @@ export function openExportDialog(): void {
 
   go.onclick = async () => {
     if (go.dataset.done) return close();
-    if (running || starting) return;
+    if (running) return;
     if (store.library.workdir !== workdirAtOpen) {
       toast(t('工作目录已切换，请重新打开'), 'warn');
       return close();
     }
     const scopeVal = el.querySelector<HTMLInputElement>('input[name=scope]:checked')?.value as Scope | undefined;
-    const mode = (el.querySelector<HTMLInputElement>('input[name=mode]:checked')?.value ?? 'original') as ExportMode;
     if (!scopeVal) return toast(t('没有可导出的照片'), 'warn');
     if (!dest.value) {
       $('.pick').click();
       return;
     }
-    let photos: Photo[];
-    if (scopeVal === 'selected') photos = selected;
-    else if (scopeVal === 'view-starred') photos = viewStarred;
-    else {
-      starting = true;
-      go.disabled = true;
-      try {
-        await store.starsSettled(); // 刚打的星还在排队写盘时先等它写完，否则会漏掉
-        photos = await api.listStarred();
-      } catch (e) {
-        photos = [];
-        toast(t('读取星标失败：{e}', { e: String(e) }), 'error');
-      } finally {
-        starting = false;
-        go.disabled = false;
-      }
-      // 等待期间对话框被关掉/重开，或者工作目录变了：这次点击作废
-      if (closeCurrent !== close) return;
-      if (store.library.workdir !== workdirAtOpen) {
-        toast(t('工作目录已切换，请重新打开'), 'warn');
-        return close();
-      }
-    }
+    const photos = scopeVal === 'selected' ? selected : viewStarred;
     if (!photos.length) return toast(t('没有可导出的照片'), 'warn');
 
     const withRaw = $<HTMLInputElement>('.with-raw').checked;
-    const settings: ExportPrefs = { dest: dest.value, mode, maxPx: Number(maxpx.value), quality: Number(quality.value), withRaw };
+    // 只导出原图（直接复制文件）；缩小导出的后端能力还在，界面上不再提供
+    const settings: ExportPrefs = { ...p, dest: dest.value, withRaw };
     prefs.set('export', settings);
 
     running = true;
@@ -201,7 +154,7 @@ export function openExportDialog(): void {
         paths: photos.map((x) => x.path),
         dest: settings.dest,
         subfolder: sub.value.trim() || undefined,
-        mode,
+        mode: 'original',
         maxPx: settings.maxPx,
         quality: settings.quality,
         includeCompanions: withRaw,
