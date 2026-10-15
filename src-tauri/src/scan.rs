@@ -231,7 +231,11 @@ pub fn scan_root(root: &Path, stars: &StarStore) -> Vec<Folder> {
             }
             let starred_set = stars.load(&dir);
             let starred = if starred_set.is_empty() { 0 } else { groups.iter().filter(|g| g.is_starred(&starred_set)).count() };
-            let rel = dir.strip_prefix(root).map(|r| r.to_string_lossy().into_owned()).unwrap_or_default();
+            // rel 统一用 "/" 分隔：Windows 上 Path 自带的是 "\\"，不统一的话排序和前端分组会两边不一样
+            let rel = dir
+                .strip_prefix(root)
+                .map(|r| r.components().map(|c| c.as_os_str().to_string_lossy()).collect::<Vec<_>>().join("/"))
+                .unwrap_or_default();
             Some(Folder {
                 name: if rel.is_empty() { root_name.clone() } else { dir.file_name().unwrap_or_default().to_string_lossy().into_owned() },
                 path: dir.to_string_lossy().into_owned(),
