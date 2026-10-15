@@ -69,8 +69,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         # macOS 和 Windows 两个任务谁先跑完谁建 Release，另一个只上传文件
+        # 发布说明用 docs/releases/<tag>.md，没有就让 GitHub 自动生成
         run: |
-          gh release create "$GITHUB_REF_NAME" --generate-notes || true
+          gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file "docs/releases/$GITHUB_REF_NAME.md" || gh release create "$GITHUB_REF_NAME" --generate-notes || true
           gh release upload "$GITHUB_REF_NAME" src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg --clobber
 
   # Windows：跑单测（覆盖 Windows 路径、隐藏属性等），打包 NSIS 安装程序（x64）
@@ -106,5 +107,5 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" --generate-notes || true
+          gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file "docs/releases/$GITHUB_REF_NAME.md" || gh release create "$GITHUB_REF_NAME" --generate-notes || true
           gh release upload "$GITHUB_REF_NAME" src-tauri/target/release/bundle/nsis/*.exe --clobber
