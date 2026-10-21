@@ -9,6 +9,7 @@ mod macos;
 mod meta;
 mod natural;
 mod picasa_ini;
+mod picklist;
 mod pool;
 mod scan;
 mod stars;
@@ -450,6 +451,32 @@ async fn set_star(paths: Vec<String>, starred: bool, state: AppStateRef<'_>) -> 
     .await
 }
 
+/// 导入选片清单（在线选片导出的 .txt，或粘贴的文件名），返回本机对应的照片，前端再给它们加星标。
+#[tauri::command]
+async fn match_pick_list(text: Option<String>, file: Option<String>, state: AppStateRef<'_>) -> Result<picklist::MatchResult, String> {
+    let st = state.inner().clone();
+    blocking(move || {
+        let text = match (text, file) {
+            (_, Some(f)) => fs::read_to_string(&f).map_err(|e| format!("读取 {f} 失败：{e}"))?,
+            (Some(t), None) => t,
+            (None, None) => String::new(),
+        };
+        let entries = picklist::parse(&text);
+        if entries.is_empty() {
+            return Err("清单里没有文件名".into());
+        }
+        let dirs: Vec<String> = st.folders.read().iter().map(|f| f.path.clone()).collect();
+        let mut photos = Vec::new();
+        for d in dirs {
+            if let Ok(list) = scan::list_folder(Path::new(&d), &st.stars) {
+                photos.extend(list);
+            }
+        }
+        Ok(picklist::match_entries(&entries, &photos))
+    })
+    .await
+}
+
 #[tauri::command]
 async fn photo_info(path: String, state: AppStateRef<'_>) -> Result<PhotoInfo, String> {
     let st = state.inner().clone();
@@ -636,6 +663,7 @@ pub fn run() {
             list_starred,
             set_star,
             set_rating,
+            match_pick_list,
             photo_info,
             prefetch_thumbs,
             export_photos,

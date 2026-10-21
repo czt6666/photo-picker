@@ -599,6 +599,58 @@ function showSettings(): void {
   el.onclick = (e) => e.target === el && close();
 }
 $('btn-settings').addEventListener('click', showSettings);
+
+/**
+ * 导入选片清单：在线选片（模特在网页上选）导出的 .txt，或粘贴的文件名。
+ * 对上的本机原图加星标，再跳到星标相册，接着就能“导出…”原图（带 RAW）去修。
+ */
+function showImportPickList(): void {
+  const el = $('export-dialog');
+  el.innerHTML = `<div class="modal-card"><h2>${t('导入选片清单')}</h2>
+    <div class="field"><div class="hint dim">${t('在线选片下载的 .txt，或粘贴文件名（空格、逗号、换行隔开都行）。对上的原图会加星标。')}</div>
+    <textarea class="input picklist" rows="7" spellcheck="false" placeholder="DSC_0001 DSC_0005 …"></textarea></div>
+    <div class="actions"><button class="btn pick-file">${t('选择文件…')}</button><span class="spacer"></span>
+    <button class="btn cancel">${t('取消')}</button><button class="btn primary ok">${t('加星标')}</button></div></div>`;
+  el.hidden = false;
+  const close = () => {
+    el.hidden = true;
+    el.innerHTML = '';
+  };
+  const ta = el.querySelector('textarea')!;
+  ta.focus();
+  const run = async (text: string | null, file: string | null) => {
+    if (!store.library.workdir) return toast(t('请先选择工作目录'), 'error');
+    try {
+      const m = await api.matchPickList(text, file);
+      if (!m.paths.length) {
+        toast(t('一张都没对上：请先打开这次拍摄的文件夹'), 'error', 5000);
+        return;
+      }
+      close();
+      const r = await store.queueStarWrite(() => api.setStar(m.paths, true));
+      for (const [dir, n] of Object.entries(r.folders)) {
+        const f = store.folder(dir);
+        if (f) f.starred = n;
+      }
+      sidebar.render();
+      await openStarred();
+      let msg = t('已给 {n} 张加星标', { n: m.paths.length });
+      if (m.missing.length) msg += t('，{n} 个没找到：{names}', { n: m.missing.length, names: m.missing.slice(0, 5).join(' ') + (m.missing.length > 5 ? ' …' : '') });
+      if (m.ambiguous) msg += t('（{n} 个文件名在多个文件夹里都有，都标上了）', { n: m.ambiguous });
+      toast(msg, m.missing.length ? 'warn' : 'info', 7000);
+    } catch (e) {
+      toast(String(e), 'error', 5000);
+    }
+  };
+  el.querySelector('.cancel')!.addEventListener('click', close);
+  el.querySelector('.ok')!.addEventListener('click', () => void run(ta.value, null));
+  el.querySelector('.pick-file')!.addEventListener('click', async () => {
+    const f = await openDialog({ multiple: false, filters: [{ name: t('选片清单'), extensions: ['txt', 'csv'] }] });
+    if (typeof f === 'string') void run(null, f);
+  });
+  el.onclick = (e) => e.target === el && close();
+}
+$('btn-import').addEventListener('click', showImportPickList);
 $('btn-settings').title = `${t('设置')}（${modKey(',')}）`;
 
 gridEl.addEventListener('contextmenu', (e) => {

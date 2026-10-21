@@ -1,0 +1,15 @@
+# 在服务器上：docker compose up -d
+# 数据（数据库 + 预览图）在 ./data，备份这个文件夹就行。
+services:
+  photo-picker:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/data
+    environment:
+      # 创建相册要输的密码，防止陌生人用你的服务器
+      PP_CREATE_PASSWORD: "改成你自己的密码"
+      # 前面套了 Nginx / CDN 时打开，才能拿到访客真实 IP
+      # PP_BEHIND_PROXY: "1"

@@ -68,7 +68,7 @@ pub fn split_group_stem(name: &str) -> (&str, &str) {
 
 /// 分组用的键：去掉扩展名、规范化大小写。`IMG_1.CR3.xmp` 这种“连 RAW 扩展名一起带上”的
 /// 侧车文件命名也认作 `IMG_1`。
-fn group_key(name: &str) -> String {
+pub fn group_key(name: &str) -> String {
     norm_name(split_group_stem(name).0)
 }
 

@@ -1035,3 +1035,10 @@ body.drop-target .content::after {
 ::-webkit-scrollbar-track {
   background: transparent;
 }
+.picklist {
+  width: 100%;
+  margin-top: 8px;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 12px;
+  resize: vertical;
+}

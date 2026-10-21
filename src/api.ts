@@ -1,7 +1,7 @@
 // 后端调用的薄封装。图片字节不走 IPC，而是拼成自定义协议 URL 直接给 <img>。
 
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
-import type { CacheInfo, ExportRequest, ExportResult, Library, Photo, PhotoInfo, SetStarResult } from './types';
+import type { CacheInfo, ExportRequest, ExportResult, Library, Photo, PhotoInfo, PickListMatch, SetStarResult } from './types';
 
 export const api = {
   getLibrary: () => invoke<Library>('get_library'),
@@ -13,6 +13,8 @@ export const api = {
   setStar: (paths: string[], starred: boolean) => invoke<SetStarResult>('set_star', { paths, starred }),
   /** 星级：0 = 清除，1～5。不动星标。返回 true = 文件夹不可写，存到了 App 数据目录 */
   setRating: (paths: string[], rating: number) => invoke<boolean>('set_rating', { paths, rating }),
+  /** 选片清单（文本或文件路径）→ 本机对应照片 */
+  matchPickList: (text: string | null, file: string | null) => invoke<PickListMatch>('match_pick_list', { text, file }),
   photoInfo: (path: string) => invoke<PhotoInfo>('photo_info', { path }),
   prefetchThumbs: (paths: string[]) => invoke<void>('prefetch_thumbs', { paths }),
   exportPhotos: (request: ExportRequest) => invoke<ExportResult>('export_photos', { request }),

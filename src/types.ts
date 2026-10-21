@@ -46,6 +46,13 @@ export interface PhotoInfo {
   exposure?: string | null;
 }
 
+/** 导入选片清单的匹配结果 */
+export interface PickListMatch {
+  paths: string[];
+  missing: string[];
+  ambiguous: number;
+}
+
 export interface SetStarResult {
   fallback: boolean;
   folders: Record<string, number>;

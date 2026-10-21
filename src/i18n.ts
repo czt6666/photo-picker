@@ -174,6 +174,18 @@ export const EN: Record<string, string> = {
 
   // ---- 导出 ----
   导出照片: 'Export photos',
+  '导入清单…': 'Import picks…',
+  '把在线选片导出的清单对回本机原图，加上星标': 'Match a pick list from online picking to your originals and star them',
+  导入选片清单: 'Import pick list',
+  '在线选片下载的 .txt，或粘贴文件名（空格、逗号、换行隔开都行）。对上的原图会加星标。':
+    'The .txt from online picking, or pasted file names (separated by spaces, commas or lines). Matching originals get starred.',
+  '选择文件…': 'Choose file…',
+  请先选择工作目录: 'Choose a folder first',
+  '一张都没对上：请先打开这次拍摄的文件夹': 'No matches. Open the shoot folder first.',
+  '已给 {n} 张加星标': 'Starred {n}',
+  '，{n} 个没找到：{names}': ', {n} not found: {names}',
+  '（{n} 个文件名在多个文件夹里都有，都标上了）': ' ({n} names exist in several folders; all starred)',
+  选片清单: 'Pick list',
   范围: 'Photos',
   当前相册的星标: 'Starred in this album',
   星标照片: 'Starred photos',
