@@ -1101,7 +1101,6 @@ body.drop-target .content::after {
 }
 
 /* 网页版：没有本地图库，藏掉本地才有的按钮 */
-body.web #btn-workdir,
 body.web #btn-rescan,
 body.web #btn-export {
   display: none;
@@ -1127,6 +1126,10 @@ body.touch .by {
 
 /* ---------- 窄屏：侧栏变成抽屉 ---------- */
 
+.btn.share {
+  margin-left: 8px;
+  flex: none;
+}
 .btn.tb-menu,
 .drawer-mask {
   display: none;
@@ -1148,6 +1151,7 @@ body.touch .by {
     width: 110px;
   }
   #btn-help,
+  #btn-workdir,
   .sb-resizer,
   .zoom {
     display: none;

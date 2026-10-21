@@ -12,8 +12,8 @@ export interface SidebarCallbacks {
   toggleStarred(): void;
   folderMenu(path: string, x: number, y: number): void;
   workdirMenu(x: number, y: number): void;
-  createRemote(): void;
-  connectRemote(): void;
+  /** 工作目录在侧栏上的显示，如 “📁 2024”“☁ 海边写真” */
+  workdirLabel(workdir: string): string;
 }
 
 export const baseName = (p: string): string => p.split(/[\\/]/).filter(Boolean).pop() ?? p;
@@ -58,8 +58,6 @@ export class Sidebar {
         this.cb.workdirMenu(r.left + 8, r.bottom);
         return;
       }
-      if (t.closest('.sb-r-add')) return this.cb.createRemote();
-      if (t.closest('.sb-r-link')) return this.cb.connectRemote();
       const group = t.closest<HTMLElement>('.sb-group');
       if (group) {
         // ⌥/Alt+点击：全部折叠或全部展开（和 Finder 一样）
@@ -106,16 +104,19 @@ export class Sidebar {
         ${starOn ? '<span class="sb-off">✕</span>' : ''}
         <span class="count">${starredTotal || ''}</span>
       </div>`;
-    html += this.remoteHtml(starOn);
     const wd = library.workdir;
     if (wd) {
       const photos = library.folders.reduce((n, f) => n + f.count, 0);
       html += `
         <div class="sb-head">${t('工作目录')}${starOn ? `<span class="sb-head-note">${t('· 只列有星标的')}</span>` : ''}</div>
-        <div class="sb-workdir" title="${esc(t('{path}\n点击切换', { path: wd }))}">
-          <span class="sb-name">📁 ${esc(baseName(wd))}</span>
+        <div class="sb-workdir" title="${esc(t('点击切换'))}">
+          <span class="sb-name">${esc(this.cb.workdirLabel(wd))}</span>
           <span class="count">${t('{n} 个相册 · {m} 张', { n: library.folders.length, m: photos })}</span>
         </div>`;
+    } else {
+      html += `
+        <div class="sb-head">${t('工作目录')}</div>
+        <div class="sb-workdir"><span class="sb-name">${t('选择工作目录…')}</span></div>`;
     }
     this.top.innerHTML = html;
     if (this.filterWorkdir !== wd) {
@@ -124,30 +125,6 @@ export class Sidebar {
     }
     this.tools.hidden = !wd || library.folders.length < FILTER_MIN;
     this.renderList();
-  }
-
-  /** 远程相册：拿到链接的人都能一起挑的相册（放在服务器上） */
-  private remoteHtml(starOn: boolean): string {
-    const { view } = store;
-    const activePath = view.kind === 'folder' ? view.path : null;
-    const list = store.remoteFolders.filter((f) => !starOn || f.starred > 0 || f.path === activePath);
-    let html = `
-      <div class="sb-head sb-r-head">${t('远程相册')}
-        <span class="sb-r-btns">
-          <button class="btn icon sb-r-link" title="${t('连接远程相册（粘贴链接）')}">🔗</button>
-          <button class="btn icon sb-r-add" title="${t('创建远程相册')}">＋</button>
-        </span>
-      </div>`;
-    if (!store.remoteFolders.length) html += `<div class="sb-empty sb-r-empty">${t('把相册共享出去，拿到链接的人都能一起挑')}</div>`;
-    for (const f of list) {
-      html += `
-        <div class="sb-item sb-remote ${f.path === activePath ? 'active' : ''}" data-path="${esc(f.path)}" title="${esc(f.name)}">
-          <span class="sb-name">☁ ${esc(f.name)}</span>
-          ${f.starred ? `<span class="sb-stars">★${f.starred}</span>` : ''}
-          ${starOn ? '' : `<span class="count">${f.count}</span>`}
-        </div>`;
-    }
-    return html;
   }
 
   private collapsedKey(): string {

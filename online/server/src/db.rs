@@ -42,7 +42,7 @@ CREATE TABLE IF NOT EXISTS stars (
 );
 "#;
 
-/// 相册码字母表：去掉了容易看错的 0/O、1/I。32 个字符 ^ 6 位 ≈ 10 亿种。
+/// 相册码字母表：去掉了容易看错的 0/O、1/I。16 位 = 80 比特，靠复制链接、不靠记，猜是猜不到的。
 const CODE_ALPHABET: &[u8] = b"23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
 const ID_ALPHABET: &[u8] = b"abcdefghijkmnpqrstuvwxyz23456789";
 
@@ -62,7 +62,7 @@ pub fn now() -> i64 {
 pub struct Album {
     /// 内部 id：图片目录名（/img/<id>/…），不对外当口令用
     pub id: String,
-    /// 6 位相册码，链接 /r/<code> 里的那个
+    /// 16 位相册码，链接 /r/<code> 里的那个
     pub code: String,
     pub name: String,
     #[serde(skip)]
@@ -151,7 +151,7 @@ impl Db {
         for _ in 0..10 {
             let album = Album {
                 id: random_string(ID_ALPHABET, 16),
-                code: random_string(CODE_ALPHABET, 6),
+                code: random_string(CODE_ALPHABET, 16),
                 name: name.to_string(),
                 owner_token: random_string(ID_ALPHABET, 24),
                 created_at: now(),

@@ -136,7 +136,7 @@ type ApiResult<T = Json<Value>> = Result<T, ApiError>;
 
 // ---------- 防猜码 ----------
 
-/// 相册码只有 6 位，挡一下暴力枚举：同一 IP 10 分钟内输错 30 次就先歇着。
+/// 相册码 16 位已经猜不到了，再挡一下暴力枚举：同一 IP 10 分钟内输错 30 次就先歇着。
 #[derive(Default)]
 struct Limiter {
     fails: Mutex<HashMap<IpAddr, (u32, Instant)>>,

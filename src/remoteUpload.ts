@@ -2,7 +2,8 @@
 //
 // 为什么不传原图？算笔账：一次外拍 1000 张，JPG+RAW 每张约 35MB，原图一共 35GB。
 // 家用宽带上行一般 30~50Mbps，传完要两三个小时，服务器还得有 35GB 硬盘。
-// 而 2048 像素的预览图约 0.4MB，1000 张才 400MB，几分钟传完；手机上看，2048 像素也已经比屏幕清楚了。
+// 而长边 1600 像素的预览图约 0.2MB，1000 张才 200MB，几分钟传完；手机屏幕横过来也就 1200 来个像素，再大也看不出来。
+// RAW 一律不传：同名有 JPG 就用 JPG 压；只有 RAW 时抠出相机内置的 JPEG 再压小。
 // 原图一直留在摄影师电脑上，导出时按文件名对回去（见 api.ts 的 resolveOriginals）。
 //
 // 谁来压：桌面版用自带的解码器（macOS 上 RAW、HEIC 都认）；网页版在浏览器里压，RAW 抠出相机内置的 JPEG 预览。
@@ -13,8 +14,8 @@ import { largestEmbeddedJpeg, jpegOrientation, rawOrientation } from './rawPrevi
 import { photoKey, remote, type UploadMeta } from './remote';
 import type { Photo } from './types';
 
-export const PREVIEW_PX = 2048;
-export const THUMB_PX = 512;
+export const PREVIEW_PX = 1600;
+export const THUMB_PX = 400;
 /** 同名多个文件时，用哪个做预览（越小越优先）。RAW 最后：抠出来的内置 JPEG 有时偏小。 */
 const PREFER: Record<string, number> = { jpg: 0, jpeg: 0, jpe: 0, heic: 1, heif: 1, avif: 2, webp: 2, png: 3, tif: 4, tiff: 4 };
 
@@ -135,7 +136,7 @@ function toJpeg(canvas: HTMLCanvasElement, quality: number): Promise<Blob> {
 }
 
 /**
- * 缩到长边 maxPx。一次从 6000 缩到 2048 会有点糊/锯齿，
+ * 缩到长边 maxPx。一次从 6000 缩到 1600 会有点糊/锯齿，
  * 所以先每次减半逼近目标，最后一步再精确缩放（和 Photoshop“两次立方”思路一样）。
  */
 function shrink(src: CanvasImageSource, sw: number, sh: number, maxPx: number, orientation: number): HTMLCanvasElement {
@@ -186,13 +187,13 @@ export async function compress(src: SourceFile): Promise<Compressed> {
   const preview = shrink(img, w, h, PREVIEW_PX, orientation);
   if (img instanceof ImageBitmap) img.close();
   const thumb = shrink(preview, preview.width, preview.height, THUMB_PX, 1);
-  const [pBlob, tBlob] = await Promise.all([toJpeg(preview, 0.82), toJpeg(thumb, 0.76)]);
+  const [pBlob, tBlob] = await Promise.all([toJpeg(preview, 0.8), toJpeg(thumb, 0.76)]);
   const result = { preview: pBlob, thumb: tBlob, width: preview.width, height: preview.height };
   preview.width = preview.height = thumb.width = thumb.height = 0; // 尽早释放显存（Safari 对 canvas 总内存有上限）
   return result;
 }
 
-/** 桌面版：用自带解码器压出 2048 预览，再在页面里缩出缩略图 */
+/** 桌面版：用自带解码器压出预览，再在页面里缩出缩略图 */
 export async function compressLocal(p: Photo): Promise<Compressed> {
   const bytes = await api.renderPreview(p.path, PREVIEW_PX);
   const preview = new Blob([bytes], { type: 'image/jpeg' });
@@ -212,10 +213,16 @@ export interface UploadJob {
   make(): Promise<Compressed>;
 }
 
-export function jobsFromLocal(photos: Photo[]): UploadJob[] {
-  return photos.map((p) => ({
-    meta: { key: photoKey('', p.name), name: p.name, folder: '', companions: p.companions, size: p.size },
-    label: p.name,
+/** 桌面版的一张本地照片，folder = 相对共享文件夹的路径（“2024/旅行”，根目录是 ""） */
+export interface LocalItem {
+  photo: Photo;
+  folder: string;
+}
+
+export function jobsFromLocal(items: LocalItem[]): UploadJob[] {
+  return items.map(({ photo: p, folder }) => ({
+    meta: { key: photoKey(folder, p.name), name: p.name, folder, companions: p.companions, size: p.size },
+    label: folder ? `${folder}/${p.name}` : p.name,
     make: () => compressLocal(p),
   }));
 }

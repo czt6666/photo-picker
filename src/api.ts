@@ -19,16 +19,16 @@ function local<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
 const split = (paths: string[]) => ({ locals: paths.filter((p) => !isRemotePath(p)), remotes: paths.filter(isRemotePath) });
 
 export const api = {
-  getLibrary: () => (isTauri ? invoke<Library>('get_library') : Promise.resolve({ ...EMPTY_LIBRARY })),
+  /** 当前工作目录：打开的是远程相册就是它，否则是本地的 */
+  getLibrary: () => (remote.active ? remote.library(remote.active) : api.localLibrary()),
+  /** 本地工作目录（打开远程相册时，后端记的本地工作目录不变） */
+  localLibrary: () => (isTauri ? invoke<Library>('get_library') : Promise.resolve({ ...EMPTY_LIBRARY })),
   rescan: () => local<Library>('rescan'),
   setWorkdir: (path: string) => local<Library>('set_workdir', { path }),
   forgetWorkdir: (path: string) => local<Library>('forget_workdir', { path }),
-  listFolder: (path: string) => (isRemotePath(path) ? remote.list(parseRemotePath(path).code) : local<Photo[]>('list_folder', { path })),
-  /** “已加星标的照片”：本地所有相册 + 所有远程相册 */
-  listStarred: async () => {
-    const [mine, shared] = await Promise.all([isTauri ? invoke<Photo[]>('list_starred') : Promise.resolve([]), remote.listStarred()]);
-    return [...mine, ...shared];
-  },
+  listFolder: (path: string) => (isRemotePath(path) ? remote.list(path) : local<Photo[]>('list_folder', { path })),
+  /** “已加星标的照片”：当前工作目录（本地或远程相册）里所有的星标照片 */
+  listStarred: () => (remote.active ? remote.listStarred(remote.active) : local<Photo[]>('list_starred')),
   setStar: async (paths: string[], starred: boolean): Promise<SetStarResult> => {
     const { locals, remotes } = split(paths);
     const res: SetStarResult = locals.length ? await local<SetStarResult>('set_star', { paths: locals, starred }) : { fallback: false, folders: {} };
@@ -99,7 +99,7 @@ async function resolveOriginals(paths: string[]): Promise<{ paths: string[]; mis
   return { paths: [...new Set(out)], missing };
 }
 
-/** 缩略图。本地：400px，mtime 进 URL（文件改了 URL 就变，webview 的图片缓存自然失效）；远程：512px 的预压缩缩略图 */
+/** 缩略图。本地：400px，mtime 进 URL（文件改了 URL 就变，webview 的图片缓存自然失效）；远程：400px 的预压缩缩略图 */
 export function thumbUrl(p: Photo): string {
   if (p.remote) return `${p.remote.img}_t.jpg`;
   return `${convertFileSrc(p.path, 'thumb')}?v=${p.mtime}`;
@@ -110,7 +110,7 @@ export function thumbUrl(p: Photo): string {
  * @param max 长边上限（像素），0 = 原图
  * @param urgent 当前正在看的那张（后端插队）；预加载的相邻照片为 false
  * @param force 强制后端转码成 JPEG（webview 解不了原格式时的退路）
- * 远程照片只有一种：2048 像素的预览图。
+ * 远程照片只有一种：长边 1600 像素的预览图。
  */
 export function photoUrl(p: Photo, max: number, urgent: boolean, force = false): string {
   if (p.remote) return `${p.remote.img}_p.jpg`;

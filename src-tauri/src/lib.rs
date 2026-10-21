@@ -461,7 +461,7 @@ async fn render_preview(path: String, max_px: u32, state: AppStateRef<'_>) -> Re
         if !st.images.allowed(&p) {
             return Err("不在图库中".into());
         }
-        decode::render_jpeg(&p, max_px, 82).map(|r| r.jpeg)
+        decode::render_jpeg(&p, max_px, 80).map(|r| r.jpeg)
     })
     .await?;
     Ok(tauri::ipc::Response::new(bytes))

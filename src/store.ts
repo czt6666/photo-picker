@@ -19,8 +19,6 @@ type Listener = () => void;
 
 class Store {
   library: Library = { workdir: null, recent: [], missing: [], folders: [] };
-  /** 本机连接/创建过的远程相册（路径是 `remote:<相册码>`），由 main.ts 从 remote.ts 同步过来 */
-  remoteFolders: Folder[] = [];
   view: View = { kind: 'none' };
   /** 当前视图的全部照片：打开的相册，加上连续翻动时接在后面的相册（星标汇总则是所有星标照片） */
   all: Photo[] = [];
@@ -98,16 +96,11 @@ class Store {
   }
 
   folder(path: string): Folder | undefined {
-    return this.library.folders.find((f) => f.path === path) ?? this.remoteFolders.find((f) => f.path === path);
-  }
-
-  /** 和 path 同一类的相册列表（本地 / 远程），连续翻动、星标筛选时按它的顺序往下接 */
-  siblings(path: string): Folder[] {
-    return path.startsWith('remote:') ? this.remoteFolders : this.library.folders;
+    return this.library.folders.find((f) => f.path === path);
   }
 
   totalStarred(): number {
-    return [...this.library.folders, ...this.remoteFolders].reduce((n, f) => n + f.starred, 0);
+    return this.library.folders.reduce((n, f) => n + f.starred, 0);
   }
 
   indexOf(path: string | null): number {

@@ -12,11 +12,11 @@ import { planRate, planToggle } from './rating';
 import { isStarMode, prefs, store, type View } from './store';
 import type { Library, Photo, Progress } from './types';
 import { LANGS, langPref, setLang, t, translateDom, type Lang } from './i18n';
-import { closeMenu, contextMenu, esc, toast } from './ui';
+import { closeMenu, contextMenu, esc, toast, type MenuItem } from './ui';
 import { formatBytes, Viewer } from './viewer';
 import { isBrowserShortcut, isMac, isTauri, isTouch, isWeb, mod as modKey, MOD_NAME, REVEAL_LABEL } from './platform';
-import { albumPath, isRemotePath, parseRemotePath, parseShareInput, remote, shareLink, type RemoteEvent } from './remote';
-import { confirmBox, continueUpload, copyText, ensureName, promptBox, showConnect, showCreate, stopUpload, uploadingCode } from './remoteUi';
+import { isRemotePath, parseRemotePath, parseShareInput, remote, type RemoteAlbum, type RemoteEvent } from './remote';
+import { confirmBox, continueUpload, ensureName, promptBox, showConnect, showCreate, showShare, stopUpload, uploadingCode } from './remoteUi';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -66,7 +66,7 @@ const sidebar = new Sidebar($('sidebar'), {
   openFolder: (path) => void openFolder(path, isStarMode(store.view)),
   toggleStarred: () => toggleStarredView(),
   folderMenu(path, x, y) {
-    if (isRemotePath(path)) return remoteMenu(parseRemotePath(path).code, x, y);
+    if (isRemotePath(path)) return void showWorkdirMenu(x, y);
     contextMenu(x, y, [
       { label: REVEAL_LABEL, action: () => void revealItemInDir(path).catch(() => {}) },
       { label: t('重新扫描'), action: () => void rescan() },
@@ -74,8 +74,7 @@ const sidebar = new Sidebar($('sidebar'), {
     ]);
   },
   workdirMenu: (x, y) => void showWorkdirMenu(x, y),
-  createRemote: () => createRemote(store.view.kind === 'folder' && !isRemotePath(store.view.path) ? store.view.path : null),
-  connectRemote: () => showConnect((a) => void afterRemoteAdded(a.code)),
+  workdirLabel: (wd) => (isRemotePath(wd) ? `☁ ${remote.get(parseRemotePath(wd).code)?.name ?? ''}` : `📁 ${baseName(wd)}`),
 });
 
 // ---------------------------------------------------------------------------
@@ -86,8 +85,16 @@ function setLibrary(lib: Library): void {
   store.setLibrary(lib);
   sidebar.render();
   const wd = lib.workdir;
-  workdirBtn.textContent = wd ? `📁 ${baseName(wd)} ▾` : t('📁 选择工作目录…');
-  workdirBtn.title = wd ? `${t('{path}\n点击切换', { path: wd })}（${modKey('O')}）` : `${t('选择照片文件夹')}（${modKey('O')}）`;
+  const a = wd && isRemotePath(wd) ? remote.get(parseRemotePath(wd).code) : undefined;
+  if (a) {
+    workdirBtn.textContent = `☁ ${a.name} ▾`;
+    workdirBtn.title = t('远程相册 · 点击切换');
+  } else {
+    workdirBtn.textContent = wd ? `📁 ${baseName(wd)} ▾` : isWeb ? t('☁ 打开远程相册…') : t('📁 选择工作目录…');
+    workdirBtn.title = wd ? `${t('{path}\n点击切换', { path: wd })}（${modKey('O')}）` : `${t('选择照片文件夹')}（${modKey('O')}）`;
+  }
+  shareBtn.hidden = !a;
+  document.body.classList.toggle('remote', !!a);
 }
 
 let viewSeq = 0;
@@ -150,7 +157,7 @@ function nextAlbumPath(): string | null {
   const v = store.view;
   // 搜索时只在已经显示的相册里找，不往后接（否则没有结果时会把整个工作目录读一遍）
   if (v.kind !== 'folder' || store.query.trim() || !chain.length) return null;
-  const all = store.siblings(chain[chain.length - 1]);
+  const all = store.library.folders;
   const list = v.starredOnly ? all.filter((f) => f.starred > 0 || chain.includes(f.path)) : all;
   const i = list.findIndex((f) => f.path === chain[chain.length - 1]);
   return i >= 0 ? (list[i + 1]?.path ?? null) : null;
@@ -210,9 +217,8 @@ function renderTitle(): void {
     const tag = v.starredOnly ? ` <span class="star">★</span> <span class="dim">${t('仅星标')} ·</span>` : '';
     let sub = esc(v.path);
     if (isRemotePath(v.path)) {
-      const code = parseRemotePath(v.path).code;
-      const names = remote.presence.get(code) ?? [];
-      sub = `☁ ${t('远程相册')}${names.length ? ` · ${t('在看：{names}', { names: esc(names.join('、')) })}` : ''}`;
+      const names = remote.presence.get(parseRemotePath(v.path).code) ?? [];
+      sub = names.length ? t('在看：{names}', { names: esc(names.join('、')) }) : '';
     }
     titleEl.innerHTML = `<b>${esc(f?.name ?? v.path.split(/[\\/]/).pop() ?? '')}</b>${tag} <span class="dim">${sub}</span>`;
   } else if (v.kind === 'starred') {
@@ -224,14 +230,14 @@ function renderTitle(): void {
 
 function renderEmpty(): void {
   let html = '';
-  if (isWeb && store.view.kind === 'none') {
+  if (isWeb && !store.library.workdir) {
     html = `<div class="empty-card">
       <div class="big">☁</div>
       <h2>${t('PhotoPicker 网页版')}</h2>
       <p class="dim">${t('打开别人发来的远程相册链接，或者把自己的照片传上来，发链接给别人一起挑。')}</p>
       <div class="row center"><button class="btn primary" id="empty-connect">${t('连接远程相册…')}</button>
       <button class="btn" id="empty-create">${t('创建远程相册…')}</button></div></div>`;
-  } else if (!store.library.workdir && !store.remoteFolders.length) {
+  } else if (!store.library.workdir) {
     html = `<div class="empty-card">
       <div class="big">📁</div>
       <h2>${t('选择一个照片文件夹')}</h2>
@@ -255,8 +261,8 @@ function renderEmpty(): void {
   emptyEl.hidden = !html;
   gridEl.hidden = !!html;
   emptyEl.querySelector('#empty-add')?.addEventListener('click', () => void chooseWorkdir());
-  emptyEl.querySelector('#empty-connect')?.addEventListener('click', () => showConnect((a) => void afterRemoteAdded(a.code)));
-  emptyEl.querySelector('#empty-create')?.addEventListener('click', () => createRemote(null));
+  emptyEl.querySelector('#empty-connect')?.addEventListener('click', () => showConnect((a) => void openRemote(a.code)));
+  emptyEl.querySelector('#empty-create')?.addEventListener('click', () => void createRemote(null));
 }
 
 function updateStatus(): void {
@@ -412,6 +418,7 @@ async function switchWorkdir(path: string): Promise<void> {
   }
   // 本次结果过时：更新的切换还在途就交给它；更新的切换都失败了，那后台的最终状态就是本次
   if (seq !== switchSeq && failedSeq !== switchSeq) return;
+  remote.activate(null);
   applyWorkdir(lib);
   await openInitialView(lib);
   if (lib.folders.length) {
@@ -449,7 +456,7 @@ async function openInitialView(lib: Library): Promise<void> {
   const last = prefs.get<View>(`lastView:${lib.workdir ?? ''}`, { kind: 'none' });
   if (last.kind === 'starred' && (await openStarred())) return;
   if (last.kind === 'folder' && store.folder(last.path) && (await openFolder(last.path, !!last.starredOnly))) return;
-  for (const f of [...lib.folders.slice(0, 3), ...store.remoteFolders.slice(0, 1)]) {
+  for (const f of lib.folders.slice(0, 3)) {
     if (f.path !== (last.kind === 'folder' ? last.path : '') && (await openFolder(f.path))) return;
   }
   showEmptyView();
@@ -462,36 +469,51 @@ function shortPath(p: string, max = 46): string {
 
 async function showWorkdirMenu(x: number, y: number): Promise<void> {
   // 打开菜单时现查一次：哪些目录现在连不上了（中途拔掉的移动硬盘）、哪些又接上了
-  const fresh = await api.getLibrary().catch(() => null);
-  if (fresh && fresh.workdir === store.library.workdir) setLibrary(fresh);
-  const { workdir, recent, missing } = store.library;
+  const localLib = await api.localLibrary().catch(() => null);
+  if (localLib && !remote.active && localLib.workdir === store.library.workdir) setLibrary(localLib);
+  const workdir = store.library.workdir;
+  const { recent = [], missing = [] } = localLib ?? {};
   const others = recent.filter((r) => r !== workdir);
   const gone = new Set(missing);
   const forgetMissing = async () => {
     let lib: Library | null = null;
     for (const m of missing.filter((m) => m !== workdir)) lib = await api.forgetWorkdir(m).catch(() => lib);
-    if (lib) setLibrary(lib);
+    if (lib && !remote.active) setLibrary(lib);
   };
-  contextMenu(x, y, [
-    { label: t('选择文件夹…'), detail: modKey('O'), action: () => void chooseWorkdir() },
-    ...(workdir
-      ? [
-          { label: t('重新扫描'), action: () => void rescan() },
-          { label: REVEAL_LABEL, action: () => void revealItemInDir(workdir).catch(() => {}) },
-        ]
-      : []),
-    ...(others.length ? [{ separator: true, label: t('最近'), action: () => {} }] : []),
-    ...others.map((r) => ({
-      label: gone.has(r) ? t('{name}（未连接）', { name: baseName(r) }) : baseName(r),
-      detail: shortPath(r),
-      disabled: gone.has(r),
-      action: () => void switchWorkdir(r),
-    })),
-    ...(others.some((r) => gone.has(r)) ? [{ label: t('移除未连接的'), action: () => void forgetMissing() }] : []),
-  ]);
+  const active = remote.active ? remote.get(remote.active) : undefined;
+  const remotes = remote.albums.filter((a) => a.code !== remote.active);
+  const items: MenuItem[] = [];
+  if (isTauri) items.push({ label: t('选择文件夹…'), detail: modKey('O'), action: () => void chooseWorkdir() });
+  if (active) items.push(...remoteItems(active));
+  else if (workdir) {
+    items.push(
+      { label: t('重新扫描'), action: () => void rescan() },
+      { label: REVEAL_LABEL, action: () => void revealItemInDir(workdir).catch(() => {}) },
+    );
+  }
+  items.push(
+    { separator: true, label: t('远程相册'), action: () => {} },
+    { label: t('连接远程相册…'), action: () => showConnect((a) => void openRemote(a.code)) },
+    { label: t('创建远程相册…'), detail: isTauri && !active && workdir ? baseName(workdir) : '', action: () => void createRemote(null) },
+    ...remotes.map((a) => ({ label: `☁ ${a.name}`, detail: t('{n} 张', { n: a.count }), action: () => void openRemote(a.code) })),
+  );
+  if (others.length) {
+    items.push(
+      { separator: true, label: t('最近'), action: () => {} },
+      ...others.map((r) => ({
+        label: gone.has(r) ? t('{name}（未连接）', { name: baseName(r) }) : baseName(r),
+        detail: shortPath(r),
+        disabled: gone.has(r),
+        action: () => void switchWorkdir(r),
+      })),
+    );
+    if (others.some((r) => gone.has(r))) items.push({ label: t('移除未连接的'), action: () => void forgetMissing() });
+  }
+  contextMenu(x, y, items);
 }
 
 async function rescan(): Promise<void> {
+  if (remote.active) return void reloadRemote();
   toast(t('正在扫描…'));
   setLibrary(await api.rescan());
   const v = store.view;
@@ -505,6 +527,7 @@ async function rescan(): Promise<void> {
 // ---------------------------------------------------------------------------
 
 const workdirBtn = $<HTMLButtonElement>('btn-workdir');
+const shareBtn = $<HTMLButtonElement>('btn-share');
 workdirBtn.addEventListener('click', () => {
   const r = workdirBtn.getBoundingClientRect();
   void showWorkdirMenu(r.left, r.bottom + 4);
@@ -528,7 +551,7 @@ function toggleStarredView(): void {
     void openFolder(v.path);
     return;
   }
-  const back = lastFolder && store.folder(lastFolder) ? lastFolder : (store.library.folders[0] ?? store.remoteFolders[0])?.path;
+  const back = lastFolder && store.folder(lastFolder) ? lastFolder : store.library.folders[0]?.path;
   if (back) void openFolder(back);
   else showEmptyView();
 }
@@ -621,7 +644,6 @@ function showSettings(): void {
     <div class="field"><label class="lang">${t('语言')} <select class="input">${opts}</select></label></div>
     <div class="field"><div class="label">${t('远程相册')}</div>
       <label class="lang">${t('你的名字')} <input class="input s-name" maxlength="40" value="${esc(remote.name)}"></label>
-      ${isTauri ? `<label class="lang">${t('服务器')} <input class="input s-server" placeholder="https://…" value="${esc(remote.defaultServer)}" spellcheck="false"></label>` : ''}
     </div>
     <div class="actions"><button class="btn primary">${t('关闭')}</button></div></div>`;
   el.hidden = false;
@@ -632,7 +654,6 @@ function showSettings(): void {
   el.querySelector('button')!.addEventListener('click', close);
   el.querySelector('select')!.addEventListener('change', (e) => setLang(((e.target as HTMLSelectElement).value || null) as Lang | null));
   el.querySelector<HTMLInputElement>('.s-name')!.addEventListener('change', (e) => (remote.name = (e.target as HTMLInputElement).value));
-  el.querySelector<HTMLInputElement>('.s-server')?.addEventListener('change', (e) => (remote.defaultServer = (e.target as HTMLInputElement).value));
   el.onclick = (e) => e.target === el && close();
 }
 $('btn-settings').addEventListener('click', showSettings);
@@ -665,6 +686,7 @@ document.addEventListener('contextmenu', (e) => {
 
 // 启动时先显示上次的图库缓存，后台扫描完成后在这里更新（新增/删除的文件夹、照片数）
 if (isTauri) void listen<Library>('library-updated', (e) => {
+  if (remote.active) return; // 正开着远程相册，本地扫描结果等切回来再用
   setLibrary(e.payload);
   const v = store.view;
   if ((v.kind === 'folder' && !store.folder(v.path)) || (v.kind === 'none' && e.payload.folders.length)) {
@@ -692,53 +714,54 @@ if (isTauri) void getCurrentWebview()
 // 远程相册
 // ---------------------------------------------------------------------------
 
-/** 把 remote.ts 里的相册列表同步到侧栏 */
-function syncRemote(): void {
-  store.remoteFolders = remote.folders();
-  sidebar.render();
+const progress = (text: string) => (thumbsEl.textContent = text);
+
+/** 创建远程相册。桌面版默认把当前本地工作目录整个共享出去；右键某个相册就只共享它 */
+async function createRemote(sourceDir: string | null): Promise<void> {
+  if (isTauri && !sourceDir) sourceDir = (await api.localLibrary().catch(() => null))?.workdir ?? null;
+  showCreate(sourceDir, (a) => void openRemote(a.code), progress);
 }
 
-function createRemote(sourceDir: string | null): void {
-  showCreate(
-    sourceDir,
-    (a) => void afterRemoteAdded(a.code),
-    (text) => (thumbsEl.textContent = text),
-  );
-}
-
-async function afterRemoteAdded(code: string): Promise<void> {
-  syncRemote();
+/** 把远程相册当工作目录打开 */
+async function openRemote(code: string): Promise<boolean> {
   closeDrawer();
-  await openFolder(albumPath(code));
+  const prev = remote.active;
+  remote.activate(code);
+  let lib: Library;
+  try {
+    lib = await remote.library(code);
+  } catch (e) {
+    remote.activate(prev);
+    toast(e instanceof Error ? e.message : String(e), 'error', 6000);
+    return false;
+  }
+  applyWorkdir(lib);
+  await openInitialView(lib);
+  return true;
 }
 
 async function connectAndOpen(link: string): Promise<boolean> {
   try {
     const a = await remote.connect(link);
-    await afterRemoteAdded(a.code);
-    return true;
+    return await openRemote(a.code);
   } catch (e) {
     toast(e instanceof Error ? e.message : String(e), 'error', 6000);
     return false;
   }
 }
 
-function remoteMenu(code: string, x: number, y: number): void {
-  const a = remote.get(code);
-  if (!a) return;
+/** 当前远程相册的管理菜单项：分享、继续上传、改名、删除（后三个只有创建者有） */
+function remoteItems(a: RemoteAlbum): MenuItem[] {
+  const code = a.code;
   const owner = !!a.ownerToken;
-  const progress = (text: string) => (thumbsEl.textContent = text);
-  contextMenu(x, y, [
-    {
-      label: t('复制链接'),
-      detail: shareLink(a),
-      action: () => void copyText(shareLink(a)).then((ok) => ok && toast(t('链接已复制，发给别人就能一起挑'))),
-    },
+  return [
+    { label: t('分享…'), action: () => showShare(a) },
+    { label: t('刷新'), action: () => void reloadRemote() },
     ...(owner
       ? [
           uploadingCode() === code
             ? { label: t('停止上传'), action: () => stopUpload() }
-            : { label: t('继续上传…'), detail: a.sourceDir ?? '', action: () => void continueUpload(a, progress) },
+            : { label: t('继续上传…'), detail: a.sourceDir ? baseName(a.sourceDir) : '', action: () => void continueUpload(a, progress) },
           {
             label: t('改名…'),
             action: async () => {
@@ -746,7 +769,7 @@ function remoteMenu(code: string, x: number, y: number): void {
               if (!name) return;
               try {
                 await remote.rename(code, name);
-                syncRemote();
+                setLibrary(remote.libraryFromCache(code));
                 renderTitle();
               } catch (e) {
                 toast(String(e), 'error');
@@ -755,7 +778,7 @@ function remoteMenu(code: string, x: number, y: number): void {
           },
         ]
       : []),
-    { label: t('从列表中移除'), action: () => forgetRemote(code) },
+    { label: t('从列表中移除'), action: () => void forgetRemote(code) },
     ...(owner
       ? [
           {
@@ -764,7 +787,7 @@ function remoteMenu(code: string, x: number, y: number): void {
               if (!(await confirmBox(t('删除远程相册「{name}」？', { name: a.name }), t('服务器上的预览和所有人的星标都会删掉，你电脑上的原图不受影响。'), t('删除')))) return;
               try {
                 await remote.destroy(code);
-                forgetRemote(code);
+                await forgetRemote(code);
               } catch (e) {
                 toast(String(e), 'error');
               }
@@ -772,29 +795,36 @@ function remoteMenu(code: string, x: number, y: number): void {
           },
         ]
       : []),
-  ]);
+  ];
 }
 
-function forgetRemote(code: string): void {
+/** 从本机列表拿掉；正开着它就退回本地工作目录（网页版退回欢迎页） */
+async function forgetRemote(code: string): Promise<void> {
+  const wasActive = remote.active === code;
   remote.forget(code);
-  syncRemote();
-  const v = store.view;
-  if (v.kind === 'folder' && v.path === albumPath(code)) toggleOrEmpty();
+  if (!wasActive) return;
+  const lib = await api.localLibrary().catch(() => ({ workdir: null, recent: [], missing: [], folders: [] }) as Library);
+  applyWorkdir(lib);
+  await openInitialView(lib);
 }
 
-/** 当前相册没了：回到别的相册，没有就显示空状态 */
-function toggleOrEmpty(): void {
-  const next = store.library.folders[0] ?? store.remoteFolders[0];
-  if (next) void openFolder(next.path);
-  else showEmptyView();
+/** 重新从服务器拉一遍当前远程相册 */
+async function reloadRemote(): Promise<void> {
+  const code = remote.active;
+  if (!code) return;
+  try {
+    await remote.fetch(code);
+  } catch (e) {
+    return toast(e instanceof Error ? e.message : String(e), 'error');
+  }
+  setLibrary(remote.libraryFromCache(code));
+  await reloadRemoteView();
 }
 
 let reloadTimer = 0;
 /** 别人的改动推过来了：更新界面 */
 function onRemoteEvent(code: string, ev: RemoteEvent): void {
-  syncRemote();
-  const dir = albumPath(code);
-  const showing = store.all.some((p) => p.dir === dir) || (store.view.kind === 'folder' && store.view.path === dir);
+  if (code !== remote.active) return;
   if (ev.type === 'stars') {
     const ids = new Set(ev.ids);
     for (const p of store.all) {
@@ -803,31 +833,40 @@ function onRemoteEvent(code: string, ev: RemoteEvent): void {
         p.starredBy = ev.starred ? ev.by : null;
       }
     }
+    setLibrary(remote.libraryFromCache(code)); // 侧栏星标数
     grid.refreshCells();
     viewer.refreshStar();
     updateStatus();
     // 星标筛选下别人取消了星：照片消失（看大图时先不动）
-    if (isStarMode(store.view) && !viewer.opened && !ev.starred && showing) {
+    if (isStarMode(store.view) && !viewer.opened && !ev.starred) {
       store.refilter();
       grid.reset(true);
       renderEmpty();
       updateStatus();
     }
-  } else if (ev.type === 'presence' || ev.type === 'album') {
-    if (showing) renderTitle();
+  } else if (ev.type === 'presence') {
+    renderTitle();
+  } else if (ev.type === 'album') {
+    setLibrary(remote.libraryFromCache(code));
+    renderTitle();
   } else if (ev.type === 'gone') {
-    toast(t('远程相册「{name}」已被创建者删除', { name: store.folder(dir)?.name ?? code }), 'warn', 5000);
-    forgetRemote(code);
-  } else if (showing && !viewer.opened) {
+    toast(t('远程相册「{name}」已被创建者删除', { name: remote.get(code)?.name ?? code }), 'warn', 5000);
+    void forgetRemote(code);
+  } else {
     // 新传了照片 / 删了照片 / 重连：攒一下再整体刷新（上传时每秒好几张）
     clearTimeout(reloadTimer);
-    reloadTimer = window.setTimeout(() => void reloadRemoteView(), 600);
+    reloadTimer = window.setTimeout(() => {
+      if (ev.type === 'reload') return void reloadRemote();
+      setLibrary(remote.libraryFromCache(code));
+      if (!viewer.opened) void reloadRemoteView();
+    }, 600);
   }
 }
 
 async function reloadRemoteView(): Promise<void> {
   const v = store.view;
-  if (viewer.opened || v.kind === 'none') return;
+  if (viewer.opened) return;
+  if (v.kind === 'none' || (v.kind === 'folder' && !store.folder(v.path))) return void openInitialView(store.library);
   const seq = viewSeq;
   try {
     const photos = v.kind === 'starred' ? await api.listStarred() : await api.listFolder(v.path);
@@ -844,6 +883,11 @@ async function reloadRemoteView(): Promise<void> {
 }
 
 remote.onEvent(onRemoteEvent);
+
+shareBtn.addEventListener('click', () => {
+  const a = remote.active ? remote.get(remote.active) : undefined;
+  if (a) showShare(a);
+});
 
 // ---------- 窄屏（手机）：侧栏是抽屉 ----------
 
@@ -936,21 +980,26 @@ async function boot(): Promise<void> {
   titleEl.innerHTML = `<span class="dim">${t('正在扫描…')}</span>`;
   let lib: Library;
   try {
-    lib = await api.getLibrary();
+    lib = await api.getLibrary().catch((e) => {
+      if (!remote.active) throw e;
+      // 上次开着的远程相册连不上（断网、被删）：先回本地工作目录
+      toast(e instanceof Error ? e.message : String(e), 'warn', 5000);
+      remote.activate(null);
+      return api.localLibrary();
+    });
   } catch (e) {
     toast(t('读取工作目录失败：{e}', { e: String(e) }), 'error', 6000);
     return;
   }
-  setLibrary(lib);
-  syncRemote();
-  remote.subscribeAll();
-  // 网页版通过 /r/<相册码> 打开：自动连上并打开这个相册
-  const m = location.pathname.match(/^\/r\/([0-9A-Za-z]{4,12})/);
+  // 通过 /r/<相册码> 打开（网页版）：自动连上并打开这个相册
+  const m = location.pathname.match(/^\/r\/([0-9A-Za-z]{4,32})/);
   if (m) {
     const ok = await connectAndOpen(`${location.origin}/r/${m[1]}`);
     history.replaceState(null, '', '/');
     if (ok) return;
   }
+  if (remote.active) remote.activate(remote.active); // 挂上实时通道
+  setLibrary(lib);
   await openInitialView(lib);
   gridEl.focus({ preventScroll: true });
 }

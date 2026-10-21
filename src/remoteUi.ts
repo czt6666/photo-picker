@@ -5,7 +5,7 @@ import { api } from './api';
 import { t } from './i18n';
 import { isTauri, isWeb } from './platform';
 import { remote, RemoteError, shareLink, type RemoteAlbum } from './remote';
-import { jobsFromFiles, jobsFromLocal, uploadJobs, type SourceFile, type UploadJob, type UploadProgress } from './remoteUpload';
+import { jobsFromFiles, jobsFromLocal, uploadJobs, type LocalItem, type SourceFile, type UploadJob, type UploadProgress } from './remoteUpload';
 import { store } from './store';
 import { esc, toast } from './ui';
 
@@ -164,79 +164,67 @@ function filePicker(dir: boolean, onPick: (files: SourceFile[]) => void): void {
   input.click();
 }
 
-async function localPhotos(dir: string) {
+/**
+ * 桌面版要共享的本地照片。dir 是当前本地工作目录 → 整个工作目录（子文件夹原样带上）；
+ * 否则就是这一个文件夹。folder 是相对 dir 的路径，导出时拼回原图。
+ */
+async function localPhotos(dir: string): Promise<LocalItem[]> {
   await store.starsSettled();
-  return api.listFolder(dir);
+  const lib = await api.localLibrary();
+  const folders = lib.workdir === dir ? lib.folders : [{ path: dir, rel: '' }];
+  const out: LocalItem[] = [];
+  for (const f of folders) for (const photo of await api.listFolder(f.path)) out.push({ photo, folder: f.rel.replace(/\\/g, '/') });
+  return out;
 }
+
+const dirName = (d: string) => d.split(/[\\/]/).filter(Boolean).pop() ?? d;
 
 /**
  * 创建远程相册。
- * 桌面版：把一个本地相册（默认当前打开的）共享出去，记住原图文件夹，导出时直接对回原图。
+ * 桌面版：把本地工作目录（或右键的那个相册）共享出去，记住原图文件夹，导出时直接对回原图。
  * 网页版：从电脑里选文件夹/照片，在浏览器里压缩后上传。
+ * 只上传缩小的 JPEG 预览，RAW 和原图都不传。
  */
 export function showCreate(sourceDir: string | null, onCreated: (a: RemoteAlbum) => void, onProgress: (text: string) => void): void {
-  let dir = sourceDir;
   let files: SourceFile[] = [];
-  const dirName = (d: string | null) => (d ? d.split(/[\\/]/).filter(Boolean).pop() ?? d : '');
+  if (isTauri && !sourceDir) return void toast(t('先选一个本地工作目录'), 'warn');
   const { el, close } = modal(`<h2>${t('创建远程相册')}</h2>
-    <p class="dim">${t('拿到链接的人都能打开、一起加星标。只上传压缩预览（约 0.4MB/张），原图留在你电脑上。')}</p>
+    <p class="dim">${t('拿到链接的人都能打开、一起加星标。只上传缩小的预览图，RAW 和原图都留在你电脑上。')}</p>
     <div class="field"><div class="label">${t('照片')}</div>
       ${
         isTauri
-          ? `<div class="row"><input class="input r-src" readonly><button class="btn r-pick">${t('选择文件夹…')}</button></div>`
+          ? `<div class="dim">${esc(sourceDir!)}</div>`
           : `<div class="row"><button class="btn r-dir">${t('选择文件夹…')}</button><button class="btn r-files">${t('选择照片…')}</button><span class="dim r-count"></span></div>`
       }
     </div>
     <div class="field"><div class="label">${t('相册名')}</div><input class="input wide r-title" maxlength="40"></div>
-    ${isWeb ? '' : `<div class="field"><div class="label">${t('服务器')}</div><input class="input wide r-server" placeholder="https://…" spellcheck="false"></div>`}
     ${nameField()}
     <div class="actions"><button class="btn cancel">${t('取消')}</button><button class="btn primary ok">${t('创建并上传')}</button></div>`);
   const title = el.querySelector<HTMLInputElement>('.r-title')!;
-  const server = el.querySelector<HTMLInputElement>('.r-server');
-  if (server) server.value = remote.defaultServer;
-  const showDir = () => {
-    const src = el.querySelector<HTMLInputElement>('.r-src');
-    if (src) src.value = dir ?? '';
-    if (!title.value && dir) title.value = dirName(dir);
-  };
-  showDir();
-  el.querySelector('.r-pick')?.addEventListener('click', async () => {
-    const picked = await openDialog({ directory: true, multiple: false, title: t('选择要共享的相册文件夹'), defaultPath: dir ?? undefined });
-    if (typeof picked === 'string') {
-      dir = picked;
-      title.value = '';
-      showDir();
-    }
-  });
+  if (sourceDir) title.value = dirName(sourceDir);
   const picked = (f: SourceFile[]) => {
     files = f;
     el.querySelector('.r-count')!.textContent = t('已选 {n} 个文件', { n: f.length });
-    if (!title.value) title.value = dirName(f[0]?.path.includes('/') ? f[0].path.split('/')[0] : '');
+    if (!title.value) title.value = f[0]?.path.includes('/') ? f[0].path.split('/')[0] : '';
   };
   el.querySelector('.r-dir')?.addEventListener('click', () => filePicker(true, picked));
   el.querySelector('.r-files')?.addEventListener('click', () => filePicker(false, picked));
   el.querySelector('.cancel')!.addEventListener('click', close);
 
   const create = async (password: string | null) => {
-    if (isTauri && !dir) return toast(t('请选择要共享的文件夹'), 'warn');
     if (isWeb && !files.length) return toast(t('请选择照片'), 'warn');
     if (!title.value.trim()) return title.focus();
-    if (server && !/^https?:\/\/\S+/.test(server.value.trim())) {
-      server.focus();
-      return toast(t('请填写服务器地址，如 https://photo.example.com'), 'warn');
-    }
     if (!takeName(el)) return;
-    if (server) remote.defaultServer = server.value;
     let jobs: UploadJob[];
     try {
-      jobs = isTauri ? jobsFromLocal(await localPhotos(dir!)) : jobsFromFiles(files);
+      jobs = isTauri ? jobsFromLocal(await localPhotos(sourceDir!)) : jobsFromFiles(files);
     } catch (e) {
       return toast(String(e), 'error');
     }
     if (!jobs.length) return toast(t('没找到能用的照片'), 'warn');
     let a: RemoteAlbum;
     try {
-      a = await remote.create(server?.value ?? remote.defaultServer, title.value.trim(), password, dir ?? undefined);
+      a = await remote.create(title.value.trim(), password, sourceDir ?? undefined);
     } catch (e) {
       if (e instanceof RemoteError && e.status === 403) {
         const pw = await askPassword();
@@ -247,11 +235,30 @@ export function showCreate(sourceDir: string | null, onCreated: (a: RemoteAlbum)
     }
     close();
     onCreated(a);
-    if (await copyText(shareLink(a))) toast(t('链接已复制，发给别人就能一起挑'), 'info', 5000);
+    showShare(a);
     void runUpload(a, jobs, onProgress);
   };
   el.querySelector('.ok')!.addEventListener('click', () => void create(null));
-  (isTauri && !dir ? el.querySelector<HTMLElement>('.r-pick') : title)?.focus();
+  title.focus();
+}
+
+/** 分享：显示链接，一键复制。建完相册自动弹出，顶栏「分享」也是它 */
+export function showShare(a: RemoteAlbum): void {
+  const link = shareLink(a);
+  const { el, close } = modal(`<h2>${t('分享「{name}」', { name: esc(a.name) })}</h2>
+    <p class="dim">${t('把链接发给模特（或任何人），打开就能一起挑，星标实时同步。')}</p>
+    <div class="row"><input class="input r-link" readonly><button class="btn primary r-copy">${t('复制链接')}</button></div>
+    <div class="actions"><button class="btn cancel">${t('关闭')}</button></div>`);
+  const input = el.querySelector<HTMLInputElement>('.r-link')!;
+  input.value = link;
+  input.addEventListener('focus', () => input.select());
+  const btn = el.querySelector<HTMLButtonElement>('.r-copy')!;
+  btn.addEventListener('click', async () => {
+    if (await copyText(link)) btn.textContent = t('已复制 ✓');
+    else input.select();
+  });
+  el.querySelector('.cancel')!.addEventListener('click', close);
+  btn.focus();
 }
 
 /** 往自己建的远程相册里再传（新增的照片，或上次中断的） */

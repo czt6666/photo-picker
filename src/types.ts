@@ -18,7 +18,7 @@ export interface Photo {
   remote?: RemoteRef;
 }
 
-/** 远程相册照片的来历。path 形如 `remote:<相册码>/<id>`，dir 形如 `remote:<相册码>` */
+/** 远程相册照片的来历。path 形如 `remote:<相册码>#<id>`，dir 形如 `remote:<相册码>/<文件夹>` */
 export interface RemoteRef {
   code: string;
   id: number;
