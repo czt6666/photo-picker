@@ -451,6 +451,22 @@ async fn set_star(paths: Vec<String>, starred: bool, state: AppStateRef<'_>) -> 
     .await
 }
 
+/// 把本地照片压成长边 max_px 的 JPEG（已按 EXIF 转正），上传到远程相册用。
+/// 走 IPC 直接回传字节（ipc::Response 不经 JSON，几百 KB 也很快）。
+#[tauri::command]
+async fn render_preview(path: String, max_px: u32, state: AppStateRef<'_>) -> Result<tauri::ipc::Response, String> {
+    let st = state.inner().clone();
+    let bytes = blocking(move || {
+        let p = PathBuf::from(&path);
+        if !st.images.allowed(&p) {
+            return Err("不在图库中".into());
+        }
+        decode::render_jpeg(&p, max_px, 82).map(|r| r.jpeg)
+    })
+    .await?;
+    Ok(tauri::ipc::Response::new(bytes))
+}
+
 /// 导入选片清单（在线选片导出的 .txt，或粘贴的文件名），返回本机对应的照片，前端再给它们加星标。
 #[tauri::command]
 async fn match_pick_list(text: Option<String>, file: Option<String>, state: AppStateRef<'_>) -> Result<picklist::MatchResult, String> {
@@ -664,6 +680,7 @@ pub fn run() {
             set_star,
             set_rating,
             match_pick_list,
+            render_preview,
             photo_info,
             prefetch_thumbs,
             export_photos,

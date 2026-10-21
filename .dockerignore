@@ -1,0 +1,9 @@
+# 只有 online/Dockerfile 用到（docker build -f online/Dockerfile .）
+.git
+node_modules
+dist
+src-tauri
+online/server/target
+online/server/data
+tests
+docs

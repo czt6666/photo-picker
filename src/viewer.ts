@@ -18,6 +18,7 @@ import { api, needsTranscode, photoUrl, rawTag, thumbUrl } from './api';
 import { ImageLoader } from './loader';
 import type { Photo, PhotoInfo } from './types';
 import { WheelStepper } from './wheel';
+import { isTauri } from './platform';
 
 const BUCKETS = [1024, 1600, 2048, 2560, 3200, 4096, 5120, 6144];
 const RAPID_MS = 160;
@@ -132,12 +133,14 @@ export class Viewer {
 
     this.stage.addEventListener('wheel', (e) => this.onWheel(e), { passive: false });
     this.stage.addEventListener('dblclick', (e) => {
-      if ((e.target as HTMLElement).closest('.v-nav')) return;
+      // 手指连点两下自己处理了（onPointerUp），浏览器补发的 dblclick 不再管
+      if ((e.target as HTMLElement).closest('.v-nav') || this.byTouch) return;
       this.toggleActualSize(e);
     });
     this.stage.addEventListener('pointerdown', (e) => this.onPointerDown(e));
     window.addEventListener('pointermove', (e) => this.onPointerMove(e));
-    window.addEventListener('pointerup', () => this.onPointerUp());
+    window.addEventListener('pointerup', (e) => this.onPointerUp(e));
+    window.addEventListener('pointercancel', (e) => this.onPointerUp(e));
     new ResizeObserver(() => {
       if (!this.isOpen) return;
       this.layout();
@@ -178,10 +181,14 @@ export class Viewer {
     this.loader.cancelExcept(new Set());
     this.setMain(null);
     this.low.removeAttribute('src');
-    void getCurrentWindow()
-      .isFullscreen()
-      .then((fs) => (fs ? getCurrentWindow().setFullscreen(false) : undefined))
-      .catch(() => {});
+    if (isTauri) {
+      void getCurrentWindow()
+        .isFullscreen()
+        .then((fs) => (fs ? getCurrentWindow().setFullscreen(false) : undefined))
+        .catch(() => {});
+    } else if (document.fullscreenElement) {
+      void document.exitFullscreen().catch(() => {});
+    }
     this.cb.close(this.current?.path ?? null);
   }
 
@@ -655,20 +662,77 @@ export class Viewer {
     if (step) this.step(step);
   }
 
+  // 鼠标：放大后拖动平移。
+  // 手指：没放大时左右滑 = 翻页；放大后单指拖 = 平移；双指捏 = 缩放；连点两下 = 1:1 / 适合。
+  // 每根按下的手指记在 touches 里，一根 = 拖/滑，两根 = 捏。
+  private touches = new Map<number, { x: number; y: number }>();
+  private swipe: { x: number; y: number; t: number } | null = null;
+  private pinch: { d: number; scale: number } | null = null;
+  private lastTap = 0;
+  private byTouch = false;
+
   private onPointerDown(e: PointerEvent): void {
-    if (e.button !== 0 || this.scale === null || (e.target as HTMLElement).closest('.v-nav')) return;
+    this.byTouch = e.pointerType === 'touch';
+    if ((e.target as HTMLElement).closest('.v-nav')) return;
+    if (e.pointerType === 'touch') {
+      this.touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (this.touches.size === 2) {
+        const [a, b] = [...this.touches.values()];
+        this.pinch = { d: Math.hypot(a.x - b.x, a.y - b.y), scale: this.currentScale() };
+        this.swipe = null;
+        this.drag = null;
+        return;
+      }
+      if (this.touches.size > 2) return;
+      this.swipe = { x: e.clientX, y: e.clientY, t: performance.now() };
+    }
+    if (e.button !== 0 || this.scale === null) return;
     this.drag = { x: e.clientX, y: e.clientY, px: this.panX, py: this.panY };
     this.stage.classList.add('dragging');
   }
 
   private onPointerMove(e: PointerEvent): void {
+    if (e.pointerType === 'touch' && this.touches.has(e.pointerId)) {
+      this.touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (this.pinch && this.touches.size === 2) {
+        const [a, b] = [...this.touches.values()];
+        const r = this.stage.getBoundingClientRect();
+        const d = Math.hypot(a.x - b.x, a.y - b.y);
+        this.zoomTo((this.pinch.scale * d) / Math.max(1, this.pinch.d), (a.x + b.x) / 2 - r.left, (a.y + b.y) / 2 - r.top);
+        return;
+      }
+    }
     if (!this.drag) return;
     this.panX = this.drag.px + (e.clientX - this.drag.x);
     this.panY = this.drag.py + (e.clientY - this.drag.y);
     this.layout();
   }
 
-  private onPointerUp(): void {
+  private onPointerUp(e: PointerEvent): void {
+    if (e.pointerType === 'touch' && this.touches.delete(e.pointerId)) {
+      if (this.pinch) {
+        // 松开一根手指后，剩下那根不接着当拖动/翻页用，免得画面跳
+        if (this.touches.size === 0) this.pinch = null;
+      } else if (this.swipe && this.isOpen) {
+        const dx = e.clientX - this.swipe.x;
+        const dy = e.clientY - this.swipe.y;
+        const quick = performance.now() - this.swipe.t < 600;
+        if (this.scale === null && quick && Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.5) {
+          this.step(dx < 0 ? 1 : -1);
+        } else if (Math.abs(dx) < 10 && Math.abs(dy) < 10) {
+          const now = performance.now();
+          if (now - this.lastTap < 300) {
+            this.lastTap = 0;
+            const r = this.stage.getBoundingClientRect();
+            if (this.scale !== null || this.pendingZoom) this.fit();
+            else this.zoomTo(this.fitScale() * 2.5, e.clientX - r.left, e.clientY - r.top);
+          } else {
+            this.lastTap = now;
+          }
+        }
+      }
+      this.swipe = null;
+    }
     this.drag = null;
     this.stage.classList.remove('dragging');
   }
@@ -692,10 +756,16 @@ export class Viewer {
 
   private async toggleFullscreen(): Promise<void> {
     try {
-      const w = getCurrentWindow();
-      await w.setFullscreen(!(await w.isFullscreen()));
+      if (isTauri) {
+        const w = getCurrentWindow();
+        await w.setFullscreen(!(await w.isFullscreen()));
+      } else if (document.fullscreenElement) {
+        await document.exitFullscreen();
+      } else {
+        await this.root.requestFullscreen();
+      }
     } catch {
-      /* 非 Tauri 环境 */
+      /* 浏览器不让（比如 iPhone 的 Safari 不支持网页全屏） */
     }
   }
 

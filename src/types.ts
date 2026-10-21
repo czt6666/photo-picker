@@ -12,6 +12,22 @@ export interface Photo {
   rating: number;
   /** 同名的 RAW / .xmp 文件名（RAW+JPG 合并显示时，跟着这张 JPG 走） */
   companions: string[];
+  /** 远程相册里的照片：最后是谁加的星（大家共用一份星标） */
+  starredBy?: string | null;
+  /** 远程相册里的照片才有 */
+  remote?: RemoteRef;
+}
+
+/** 远程相册照片的来历。path 形如 `remote:<相册码>/<id>`，dir 形如 `remote:<相册码>` */
+export interface RemoteRef {
+  code: string;
+  id: number;
+  width: number;
+  height: number;
+  /** 在摄影师电脑上的相对文件夹 */
+  folder: string;
+  /** 图片地址前缀，后面接 `_t.jpg`（缩略图）/ `_p.jpg`（预览图） */
+  img: string;
 }
 
 export interface Folder {

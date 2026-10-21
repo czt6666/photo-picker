@@ -2,7 +2,9 @@
 # 数据（数据库 + 预览图）在 ./data，备份这个文件夹就行。
 services:
   photo-picker:
-    build: .
+    build:
+      context: ..
+      dockerfile: online/Dockerfile
     restart: unless-stopped
     ports:
       - "8080:8080"

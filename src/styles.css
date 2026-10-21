@@ -1042,3 +1042,156 @@ body.drop-target .content::after {
   font-size: 12px;
   resize: vertical;
 }
+
+/* ---------- 远程相册 ---------- */
+
+.sb-r-head {
+  display: flex;
+  align-items: center;
+}
+.sb-r-btns {
+  margin-left: auto;
+  display: flex;
+  gap: 2px;
+}
+.sb-r-btns .btn {
+  padding: 1px 6px;
+  font-size: 12px;
+  text-transform: none;
+}
+.sb-r-empty {
+  padding: 3px 14px 6px;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: normal;
+}
+/* 远程相册里谁加的星：左下角星标右边的小名字 */
+.by {
+  position: absolute;
+  left: 32px;
+  bottom: 8px;
+  max-width: calc(100% - 70px);
+  padding: 0 5px;
+  border-radius: 3px;
+  font-size: 10px;
+  line-height: 16px;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.6);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
+.input.wide {
+  width: 100%;
+  box-sizing: border-box;
+}
+.row.center {
+  justify-content: center;
+  flex-wrap: wrap;
+}
+.remote-dlg .r-count {
+  margin-left: 4px;
+}
+.remote-dlg .row {
+  flex-wrap: wrap;
+}
+.v-stage {
+  touch-action: none;
+}
+
+/* 网页版：没有本地图库，藏掉本地才有的按钮 */
+body.web #btn-workdir,
+body.web #btn-rescan,
+body.web #btn-export {
+  display: none;
+}
+body.web .tb-side {
+  width: auto;
+  border-right: none;
+  padding: 0;
+}
+
+/* 手机/平板：触屏没有悬停，星标按钮一直露出来，好点 */
+body.touch .badge {
+  opacity: 0.85;
+  width: 28px;
+  height: 28px;
+  line-height: 28px;
+  font-size: 17px;
+}
+body.touch .by {
+  left: 38px;
+  bottom: 10px;
+}
+
+/* ---------- 窄屏：侧栏变成抽屉 ---------- */
+
+.btn.tb-menu,
+.drawer-mask {
+  display: none;
+}
+@media (max-width: 760px) {
+  .btn.tb-menu {
+    display: inline-block;
+    margin-left: 8px;
+  }
+  .toolbar {
+    padding-top: env(safe-area-inset-top);
+  }
+  .tb-side {
+    width: auto;
+    border-right: none;
+    padding: 0;
+  }
+  .search {
+    width: 110px;
+  }
+  #btn-help,
+  .sb-resizer,
+  .zoom {
+    display: none;
+  }
+  .sidebar {
+    position: fixed;
+    z-index: 15;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: min(300px, 82vw);
+    padding-top: calc(12px + env(safe-area-inset-top));
+    transform: translateX(-100%);
+    transition: transform 0.2s ease;
+    box-shadow: 4px 0 30px rgba(0, 0, 0, 0.5);
+  }
+  body.drawer-open .sidebar {
+    transform: none;
+  }
+  body.drawer-open .drawer-mask {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 14;
+    background: rgba(0, 0, 0, 0.45);
+  }
+  .sb-item {
+    padding-top: 9px;
+    padding-bottom: 9px;
+  }
+  .statusbar {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .v-top {
+    flex-wrap: wrap;
+    padding-top: env(safe-area-inset-top);
+  }
+  .v-zoom,
+  .v-full,
+  .v-info,
+  .v-nav {
+    display: none;
+  }
+  .v-strip {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+}

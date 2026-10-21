@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { jpegOrientation, largestEmbeddedJpeg, rawOrientation, walkJpeg } from '../src/rawPreview';
+import { jpegOrientation, largestEmbeddedJpeg, rawOrientation, walkJpeg } from '../../src/rawPreview';
 
 /** 拼一个只有段结构、没有真实图像数据的“JPEG”，够测切割逻辑了 */
 function fakeJpeg(w: number, h: number, opts: { sof?: number; exifOrientation?: number; scan?: number[] } = {}): number[] {

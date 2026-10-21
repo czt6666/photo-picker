@@ -1,18 +1,20 @@
-# PhotoPicker 在线选片：一个镜像装下网页和服务端。
-#   docker build -t photo-picker-online online/
+# PhotoPicker 网页版 + 远程相册服务：一个镜像装下网页和服务端。
+# 在仓库根目录构建（网页就是 App 本身的前端）：
+#   docker build -f online/Dockerfile -t photo-picker-online .
 #   docker run -d -p 8080:8080 -v pp-data:/data -e PP_CREATE_PASSWORD=你的密码 photo-picker-online
 
 FROM node:22-bookworm-slim AS web
 WORKDIR /web
-COPY web/package.json web/package-lock.json ./
+COPY package.json package-lock.json ./
 RUN npm ci --no-audit --no-fund
-COPY web/ ./
+COPY index.html tsconfig.json vite.config.ts ./
+COPY src ./src
 RUN npm run build
 
 FROM rust:1-bookworm AS server
 WORKDIR /server
-COPY server/Cargo.toml server/Cargo.lock ./
-COPY server/src ./src
+COPY online/server/Cargo.toml online/server/Cargo.lock ./
+COPY online/server/src ./src
 RUN cargo build --release --locked
 
 FROM debian:bookworm-slim

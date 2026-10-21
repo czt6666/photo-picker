@@ -1,30 +1,35 @@
-//! PhotoPicker 在线选片服务。
+//! PhotoPicker 远程相册服务。
 //!
-//! 三种人、三种入口：
-//! - 摄影师：创建相册后拿到一个**管理链接**（`/a/<admin_token>`），在那里上传、看结果、导出清单；
-//! - 模特：拿到 6 位**共享码**（`/s/<code>`），输入名字后在手机/平板/电脑上选片；
-//! - 浏览器直接取图：`/img/<album_id>/<photo_id>_t.jpg`（缩略图）和 `_p.jpg`（预览图）。
+//! 一个远程相册 = 一份压缩预览 + 一份大家共用的星标。链接是 `/r/<相册码>`，拿到链接的人都能进来挑。
+//! - 网页版 PhotoPicker（就是桌面版同一套前端）也由这里提供：`/`、`/r/<code>` 都返回它的 index.html；
+//! - 桌面版通过同样的接口访问（允许跨域）；
+//! - 谁加星/取消、新传了照片，都通过 WebSocket 实时推给正在看这个相册的所有人。
 //!
-//! 服务器上**只有压缩后的预览**，没有原图：压缩在摄影师的浏览器里做（见 web/src/upload.ts），
-//! 原图一直留在摄影师电脑上。选完后摄影师导出“原图文件名清单”，用它在本地找回原图去修。
+//! 服务器上**只有压缩后的预览**，没有原图：摄影师那边上传前就压好了（桌面版用自带的解码器，网页版在浏览器里压），
+//! 原图一直留在摄影师电脑上，导出时按文件名对回去。
 
 pub mod db;
 
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{ConnectInfo, DefaultBodyLimit, FromRequestParts, Multipart, Path as UrlPath, State};
 use axum::http::request::Parts;
-use axum::http::{header, HeaderValue, StatusCode};
+use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{delete, get, post, put};
+use axum::routing::{get, post, put};
 use axum::{Json, Router};
+use futures_util::{SinkExt, StreamExt};
 use parking_lot::Mutex;
 use serde::Deserialize;
 use serde_json::{json, Value};
+use tokio::sync::broadcast;
+use tower_http::cors::CorsLayer;
 use tower_http::services::{ServeDir, ServeFile};
 use tower_http::set_header::SetResponseHeaderLayer;
 
@@ -33,9 +38,9 @@ use db::{Album, Db, NewPhoto};
 pub struct Config {
     /// 数据目录：里面是 picker.db 和 photos/
     pub data_dir: PathBuf,
-    /// 前端构建产物（web/dist）
+    /// 网页版 PhotoPicker 的构建产物（仓库根目录 `npm run build` 出来的 dist）
     pub web_dir: PathBuf,
-    /// 设了的话，创建相册要输这个密码，防止陌生人拿你的服务器当图床
+    /// 设了的话，创建远程相册要输这个密码，防止陌生人拿你的服务器当图床
     pub create_password: Option<String>,
     /// 在 Nginx/CDN 后面时设为 true，才信任 X-Forwarded-For 里的客户端 IP
     pub behind_proxy: bool,
@@ -47,6 +52,7 @@ pub struct AppState {
     create_password: Option<String>,
     behind_proxy: bool,
     limiter: Limiter,
+    hub: Hub,
 }
 
 type S = State<Arc<AppState>>;
@@ -54,7 +60,6 @@ type S = State<Arc<AppState>>;
 pub const THUMB_MAX_BYTES: usize = 1024 * 1024;
 pub const PREVIEW_MAX_BYTES: usize = 10 * 1024 * 1024;
 const NAME_MAX: usize = 40;
-const NOTE_MAX: usize = 500;
 
 pub fn app(cfg: Config) -> Result<Router, String> {
     let photos_dir = cfg.data_dir.join("photos");
@@ -66,40 +71,37 @@ pub fn app(cfg: Config) -> Result<Router, String> {
         create_password: cfg.create_password.filter(|p| !p.is_empty()),
         behind_proxy: cfg.behind_proxy,
         limiter: Limiter::default(),
+        hub: Hub::default(),
     });
 
     let api = Router::new()
         .route("/config", get(config))
         .route("/albums", post(create_album))
-        .route("/admin/{token}", get(admin_get).patch(admin_update).delete(admin_delete))
-        .route("/admin/{token}/code", post(admin_reset_code))
-        .route("/admin/{token}/photos", post(admin_upload).layer(DefaultBodyLimit::max(PREVIEW_MAX_BYTES + THUMB_MAX_BYTES + 64 * 1024)))
-        .route("/admin/{token}/photos/{id}", delete(admin_delete_photo))
-        .route("/admin/{token}/pickers/{name}", delete(admin_delete_picker))
-        .route("/share/{code}", get(share_get))
-        .route("/share/{code}/join", post(share_join))
-        .route("/share/{code}/pick", put(share_pick))
-        .route("/share/{code}/submit", post(share_submit))
+        .route("/albums/{code}", get(get_album).patch(rename_album).delete(delete_album))
+        .route(
+            "/albums/{code}/photos",
+            post(upload).layer(DefaultBodyLimit::max(PREVIEW_MAX_BYTES + THUMB_MAX_BYTES + 64 * 1024)),
+        )
+        .route("/albums/{code}/photos/delete", post(delete_photos))
+        .route("/albums/{code}/stars", put(set_stars))
+        .route("/albums/{code}/ws", get(ws))
         .fallback(|| async { ApiError::new(StatusCode::NOT_FOUND, "没有这个接口") });
 
     // 预览图的文件名里带着自增 id，同一个 URL 的内容永远不变，可以让浏览器/CDN 缓存一年。
-    let images = Router::new()
-        .fallback_service(ServeDir::new(&photos_dir))
-        .layer(SetResponseHeaderLayer::overriding(
-            header::CACHE_CONTROL,
-            HeaderValue::from_static("public, max-age=31536000, immutable"),
-        ));
+    let images = Router::new().fallback_service(ServeDir::new(&photos_dir)).layer(SetResponseHeaderLayer::overriding(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("public, max-age=31536000, immutable"),
+    ));
 
-    let web = &cfg.web_dir;
-    let page = |name: &str| ServeFile::new(web.join(name));
+    let index = ServeFile::new(cfg.web_dir.join("index.html"));
     Ok(Router::new()
         .nest("/api", api)
         .nest("/img", images)
-        .route_service("/", page("index.html"))
-        .route_service("/new", page("index.html"))
-        .route_service("/a/{token}", page("admin.html"))
-        .route_service("/s/{code}", page("pick.html"))
-        .fallback_service(ServeDir::new(web))
+        // 桌面版的页面来源是 tauri://localhost，要允许它跨域调接口、取图
+        .layer(CorsLayer::permissive())
+        .route_service("/", index.clone())
+        .route_service("/r/{code}", index)
+        .fallback_service(ServeDir::new(&cfg.web_dir))
         .with_state(state))
 }
 
@@ -134,7 +136,7 @@ type ApiResult<T = Json<Value>> = Result<T, ApiError>;
 
 // ---------- 防猜码 ----------
 
-/// 共享码只有 6 位，挡一下暴力枚举：同一 IP 10 分钟内输错 30 次就先歇着。
+/// 相册码只有 6 位，挡一下暴力枚举：同一 IP 10 分钟内输错 30 次就先歇着。
 #[derive(Default)]
 struct Limiter {
     fails: Mutex<HashMap<IpAddr, (u32, Instant)>>,
@@ -145,8 +147,7 @@ const FAIL_MAX: u32 = 30;
 
 impl Limiter {
     fn blocked(&self, ip: IpAddr) -> bool {
-        let m = self.fails.lock();
-        m.get(&ip).is_some_and(|(n, t)| *n >= FAIL_MAX && t.elapsed() < FAIL_WINDOW)
+        self.fails.lock().get(&ip).is_some_and(|(n, t)| *n >= FAIL_MAX && t.elapsed() < FAIL_WINDOW)
     }
     fn fail(&self, ip: IpAddr) {
         let mut m = self.fails.lock();
@@ -177,24 +178,12 @@ impl FromRequestParts<Arc<AppState>> for ClientIp {
                 return Ok(ClientIp(ip));
             }
         }
-        let ip = parts
-            .extensions
-            .get::<ConnectInfo<SocketAddr>>()
-            .map(|c| c.0.ip())
-            .unwrap_or(IpAddr::from([0, 0, 0, 0]));
+        let ip = parts.extensions.get::<ConnectInfo<SocketAddr>>().map(|c| c.0.ip()).unwrap_or(IpAddr::from([0, 0, 0, 0]));
         Ok(ClientIp(ip))
     }
 }
 
-// ---------- 查相册 ----------
-
-fn album_by_token(st: &AppState, token: &str) -> ApiResult<Album> {
-    st.db
-        .album_by_token(token)?
-        .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "管理链接无效，相册可能已删除"))
-}
-
-fn album_by_code(st: &AppState, ip: IpAddr, code: &str) -> ApiResult<Album> {
+fn album(st: &AppState, ip: IpAddr, code: &str) -> ApiResult<Album> {
     if st.limiter.blocked(ip) {
         return Err(ApiError::new(StatusCode::TOO_MANY_REQUESTS, "输错太多次，请 10 分钟后再试"));
     }
@@ -202,9 +191,19 @@ fn album_by_code(st: &AppState, ip: IpAddr, code: &str) -> ApiResult<Album> {
         Some(a) => Ok(a),
         None => {
             st.limiter.fail(ip);
-            Err(ApiError::new(StatusCode::NOT_FOUND, "共享码不对，或相册已删除"))
+            Err(ApiError::new(StatusCode::NOT_FOUND, "相册不存在，可能链接不对或已被删除"))
         }
     }
+}
+
+/// 上传、删除、改名只有创建者能做：创建时拿到的 owner_token 放在 `x-owner-token` 头里
+fn owned(st: &AppState, ip: IpAddr, code: &str, headers: &HeaderMap) -> ApiResult<Album> {
+    let a = album(st, ip, code)?;
+    let token = headers.get("x-owner-token").and_then(|v| v.to_str().ok()).unwrap_or("");
+    if token.is_empty() || token != a.owner_token {
+        return Err(ApiError::new(StatusCode::FORBIDDEN, "只有创建这个相册的人能这样做"));
+    }
+    Ok(a)
 }
 
 fn clean_name(name: &str, what: &str) -> ApiResult<String> {
@@ -218,21 +217,106 @@ fn clean_name(name: &str, what: &str) -> ApiResult<String> {
     Ok(n)
 }
 
-fn album_json(a: &Album, admin: bool) -> Value {
-    let mut v = json!({
-        "id": a.id,
-        "name": a.name,
-        "pick_limit": a.pick_limit,
-        "closed": a.closed,
-        "created_at": a.created_at,
-    });
-    if admin {
-        v["share_code"] = json!(a.share_code);
-    }
-    v
+// ---------- 实时推送 ----------
+
+/// 每个正在被人看的相册一个广播频道，外加“谁在看”的名单。
+#[derive(Default)]
+struct Hub {
+    rooms: Mutex<HashMap<String, Room>>,
+    next_id: AtomicU64,
 }
 
-// ---------- 摄影师 ----------
+struct Room {
+    tx: broadcast::Sender<String>,
+    viewers: HashMap<u64, String>,
+}
+
+impl Hub {
+    fn join(&self, album_id: &str) -> (u64, broadcast::Receiver<String>) {
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        let mut rooms = self.rooms.lock();
+        let room = rooms
+            .entry(album_id.to_string())
+            .or_insert_with(|| Room { tx: broadcast::channel(256).0, viewers: HashMap::new() });
+        room.viewers.insert(id, String::new());
+        (id, room.tx.subscribe())
+    }
+
+    fn set_name(&self, album_id: &str, conn: u64, name: String) {
+        if let Some(room) = self.rooms.lock().get_mut(album_id) {
+            room.viewers.insert(conn, name);
+        }
+        self.send_presence(album_id);
+    }
+
+    fn leave(&self, album_id: &str, conn: u64) {
+        let mut rooms = self.rooms.lock();
+        if let Some(room) = rooms.get_mut(album_id) {
+            room.viewers.remove(&conn);
+            if room.viewers.is_empty() {
+                rooms.remove(album_id);
+                return;
+            }
+        }
+        drop(rooms);
+        self.send_presence(album_id);
+    }
+
+    fn send_presence(&self, album_id: &str) {
+        let rooms = self.rooms.lock();
+        if let Some(room) = rooms.get(album_id) {
+            let mut names: Vec<&String> = room.viewers.values().filter(|n| !n.is_empty()).collect();
+            names.sort();
+            names.dedup();
+            let _ = room.tx.send(json!({ "type": "presence", "names": names }).to_string());
+        }
+    }
+
+    fn send(&self, album_id: &str, msg: Value) {
+        if let Some(room) = self.rooms.lock().get(album_id) {
+            let _ = room.tx.send(msg.to_string());
+        }
+    }
+}
+
+async fn ws(State(st): S, ClientIp(ip): ClientIp, UrlPath(code): UrlPath<String>, upgrade: WebSocketUpgrade) -> ApiResult<Response> {
+    let a = album(&st, ip, &code)?;
+    Ok(upgrade.on_upgrade(move |socket| run_socket(st, a.id, socket)))
+}
+
+async fn run_socket(st: Arc<AppState>, album_id: String, socket: WebSocket) {
+    let (conn, mut rx) = st.hub.join(&album_id);
+    let (mut sink, mut stream) = socket.split();
+    let mut ping = tokio::time::interval(Duration::from_secs(25)); // 防止中间的代理把空闲连接掐掉
+    loop {
+        tokio::select! {
+            msg = rx.recv() => match msg {
+                Ok(text) => if sink.send(Message::Text(text.into())).await.is_err() { break },
+                // 落后太多（网太慢）：让客户端整体重新拉一次
+                Err(broadcast::error::RecvError::Lagged(_)) => {
+                    if sink.send(Message::Text(json!({ "type": "reload" }).to_string().into())).await.is_err() { break }
+                }
+                Err(_) => break,
+            },
+            incoming = stream.next() => match incoming {
+                Some(Ok(Message::Text(text))) => {
+                    #[derive(Deserialize)]
+                    struct Hello { name: String }
+                    if let Ok(h) = serde_json::from_str::<Hello>(&text) {
+                        let name: String = h.name.trim().chars().filter(|c| !c.is_control()).take(NAME_MAX).collect();
+                        st.hub.set_name(&album_id, conn, name);
+                    }
+                }
+                Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
+                Some(Ok(_)) => {}
+            },
+            _ = ping.tick() => if sink.send(Message::Ping(Vec::new().into())).await.is_err() { break },
+        }
+    }
+    st.hub.leave(&album_id, conn);
+}
+
+// ---------- 接口 ----------
 
 async fn config(State(st): S) -> Json<Value> {
     Json(json!({ "create_password_required": st.create_password.is_some() }))
@@ -241,7 +325,6 @@ async fn config(State(st): S) -> Json<Value> {
 #[derive(Deserialize)]
 struct CreateAlbum {
     name: String,
-    pick_limit: Option<u32>,
     password: Option<String>,
 }
 
@@ -252,45 +335,32 @@ async fn create_album(State(st): S, Json(req): Json<CreateAlbum>) -> ApiResult {
         }
     }
     let name = clean_name(&req.name, "相册名")?;
-    let album = st.db.create_album(&name, req.pick_limit.filter(|n| *n > 0))?;
-    Ok(Json(json!({ "album": album_json(&album, true), "admin_token": album.admin_token })))
+    let a = st.db.create_album(&name)?;
+    Ok(Json(json!({ "album": a, "owner_token": a.owner_token })))
 }
 
-async fn admin_get(State(st): S, UrlPath(token): UrlPath<String>) -> ApiResult {
-    let a = album_by_token(&st, &token)?;
-    Ok(Json(json!({
-        "album": album_json(&a, true),
-        "photos": st.db.photos(&a.id)?,
-        "pickers": st.db.pickers(&a.id)?,
-    })))
+async fn get_album(State(st): S, ClientIp(ip): ClientIp, UrlPath(code): UrlPath<String>) -> ApiResult {
+    let a = album(&st, ip, &code)?;
+    Ok(Json(json!({ "album": a, "photos": st.db.photos(&a.id)? })))
 }
 
 #[derive(Deserialize)]
-struct UpdateAlbum {
-    name: Option<String>,
-    /// 0 表示不限
-    pick_limit: Option<u32>,
-    closed: Option<bool>,
+struct Rename {
+    name: String,
 }
 
-async fn admin_update(State(st): S, UrlPath(token): UrlPath<String>, Json(req): Json<UpdateAlbum>) -> ApiResult {
-    let a = album_by_token(&st, &token)?;
-    let name = req.name.as_deref().map(|n| clean_name(n, "相册名")).transpose()?;
-    let limit = req.pick_limit.map(|n| (n > 0).then_some(n));
-    st.db.update_album(&a.id, name.as_deref(), limit, req.closed)?;
-    let a = album_by_token(&st, &token)?;
-    Ok(Json(json!({ "album": album_json(&a, true) })))
+async fn rename_album(State(st): S, ClientIp(ip): ClientIp, UrlPath(code): UrlPath<String>, headers: HeaderMap, Json(req): Json<Rename>) -> ApiResult {
+    let a = owned(&st, ip, &code, &headers)?;
+    let name = clean_name(&req.name, "相册名")?;
+    st.db.rename_album(&a.id, &name)?;
+    st.hub.send(&a.id, json!({ "type": "album", "name": name }));
+    Ok(Json(json!({ "ok": true })))
 }
 
-async fn admin_reset_code(State(st): S, UrlPath(token): UrlPath<String>) -> ApiResult {
-    let a = album_by_token(&st, &token)?;
-    let code = st.db.reset_code(&a.id)?;
-    Ok(Json(json!({ "share_code": code })))
-}
-
-async fn admin_delete(State(st): S, UrlPath(token): UrlPath<String>) -> ApiResult {
-    let a = album_by_token(&st, &token)?;
+async fn delete_album(State(st): S, ClientIp(ip): ClientIp, UrlPath(code): UrlPath<String>, headers: HeaderMap) -> ApiResult {
+    let a = owned(&st, ip, &code, &headers)?;
     st.db.delete_album(&a.id)?;
+    st.hub.send(&a.id, json!({ "type": "gone" }));
     let dir = st.photos_dir.join(&a.id);
     if let Err(e) = tokio::fs::remove_dir_all(&dir).await {
         if e.kind() != std::io::ErrorKind::NotFound {
@@ -307,9 +377,11 @@ struct UploadMeta {
     #[serde(default)]
     folder: String,
     #[serde(default)]
-    originals: Vec<String>,
+    companions: Vec<String>,
     width: u32,
     height: u32,
+    #[serde(default)]
+    size: u64,
 }
 
 fn is_jpeg(b: &[u8]) -> bool {
@@ -320,18 +392,16 @@ fn photo_file(dir: &Path, album_id: &str, photo_id: i64, kind: char) -> PathBuf 
     dir.join(album_id).join(format!("{photo_id}_{kind}.jpg"))
 }
 
-/// 上传一张：表单里 `meta`（JSON）、`thumb`、`preview`（都是浏览器压好的 JPEG）。
-/// 同一个 key 传过了就直接返回已有的那张，所以断网后重新选文件夹就是“续传”。
-async fn admin_upload(State(st): S, UrlPath(token): UrlPath<String>, mut form: Multipart) -> ApiResult {
-    let a = album_by_token(&st, &token)?;
+/// 上传一张：表单里 `meta`（JSON）、`thumb`、`preview`（都是压好的 JPEG）。
+/// 同一个 key 传过了就直接返回已有的那张，所以中断后再传一次就是“续传”。
+async fn upload(State(st): S, ClientIp(ip): ClientIp, UrlPath(code): UrlPath<String>, headers: HeaderMap, mut form: Multipart) -> ApiResult {
+    let a = owned(&st, ip, &code, &headers)?;
     let (mut meta, mut thumb, mut preview) = (None, None, None);
     while let Some(field) = form.next_field().await.map_err(|e| ApiError::bad(format!("表单不完整：{e}")))? {
         let name = field.name().unwrap_or_default().to_string();
         let bytes = field.bytes().await.map_err(|e| ApiError::bad(format!("上传中断：{e}")))?;
         match name.as_str() {
-            "meta" => {
-                meta = Some(serde_json::from_slice::<UploadMeta>(&bytes).map_err(|e| ApiError::bad(format!("meta 格式不对：{e}")))?)
-            }
+            "meta" => meta = Some(serde_json::from_slice::<UploadMeta>(&bytes).map_err(|e| ApiError::bad(format!("meta 格式不对：{e}")))?),
             "thumb" => thumb = Some(bytes),
             "preview" => preview = Some(bytes),
             _ => {}
@@ -347,20 +417,22 @@ async fn admin_upload(State(st): S, UrlPath(token): UrlPath<String>, mut form: M
         return Err(ApiError::bad("图片太大，应先压缩"));
     }
     let key = meta.key.trim().to_lowercase();
-    if key.is_empty() || key.len() > 1024 || meta.name.len() > 512 || meta.folder.len() > 1024 || meta.originals.len() > 20 {
+    if key.is_empty() || key.len() > 1024 || meta.name.len() > 512 || meta.folder.len() > 1024 || meta.companions.len() > 20 {
         return Err(ApiError::bad("照片信息不对"));
     }
-    let mut originals = meta.originals;
-    if originals.is_empty() {
-        originals.push(meta.name.clone());
-    }
-    let new = NewPhoto { key, name: meta.name, folder: meta.folder, originals, width: meta.width, height: meta.height };
-    let photo = match st.db.insert_photo(&a.id, new) {
-        Ok(p) => p,
-        Err(Ok(existing)) => return Ok(Json(json!({ "photo": existing, "existed": true }))),
-        Err(Err(e)) => return Err(e.into()),
+    let new = NewPhoto {
+        key,
+        name: meta.name,
+        folder: meta.folder,
+        companions: meta.companions,
+        width: meta.width,
+        height: meta.height,
+        size: meta.size,
     };
-
+    let (photo, created) = st.db.insert_photo(&a.id, new)?;
+    if !created {
+        return Ok(Json(json!({ "photo": photo, "existed": true })));
+    }
     let write = async {
         tokio::fs::create_dir_all(st.photos_dir.join(&a.id)).await?;
         for (kind, bytes) in [('t', &thumb), ('p', &preview)] {
@@ -372,86 +444,48 @@ async fn admin_upload(State(st): S, UrlPath(token): UrlPath<String>, mut form: M
         std::io::Result::Ok(())
     };
     if let Err(e) = write.await {
-        let _ = st.db.delete_photo(&a.id, photo.id);
+        let _ = st.db.delete_photos(&a.id, &[photo.id]);
         return Err(format!("保存图片失败：{e}").into());
     }
+    st.hub.send(&a.id, json!({ "type": "photos", "photos": [&photo] }));
     Ok(Json(json!({ "photo": photo, "existed": false })))
 }
 
-async fn admin_delete_photo(State(st): S, UrlPath((token, id)): UrlPath<(String, i64)>) -> ApiResult {
-    let a = album_by_token(&st, &token)?;
-    if !st.db.delete_photo(&a.id, id)? {
-        return Err(ApiError::new(StatusCode::NOT_FOUND, "照片不存在"));
-    }
-    for kind in ['t', 'p'] {
-        let _ = tokio::fs::remove_file(photo_file(&st.photos_dir, &a.id, id, kind)).await;
-    }
-    Ok(Json(json!({ "ok": true })))
-}
-
-async fn admin_delete_picker(State(st): S, UrlPath((token, name)): UrlPath<(String, String)>) -> ApiResult {
-    let a = album_by_token(&st, &token)?;
-    st.db.delete_picker(&a.id, &name)?;
-    Ok(Json(json!({ "ok": true })))
-}
-
-// ---------- 模特 ----------
-
-async fn share_get(State(st): S, ClientIp(ip): ClientIp, UrlPath(code): UrlPath<String>) -> ApiResult {
-    let a = album_by_code(&st, ip, &code)?;
-    Ok(Json(json!({ "album": album_json(&a, false), "photos": st.db.photos(&a.id)? })))
-}
-
 #[derive(Deserialize)]
-struct Join {
-    name: String,
+struct Ids {
+    ids: Vec<i64>,
 }
 
-async fn share_join(State(st): S, ClientIp(ip): ClientIp, UrlPath(code): UrlPath<String>, Json(req): Json<Join>) -> ApiResult {
-    let a = album_by_code(&st, ip, &code)?;
-    let name = clean_name(&req.name, "名字")?;
-    Ok(Json(json!({ "picker": st.db.join(&a.id, &name)? })))
-}
-
-#[derive(Deserialize)]
-struct PickReq {
-    name: String,
-    photo_id: i64,
-    picked: bool,
-    note: Option<String>,
-}
-
-async fn share_pick(State(st): S, ClientIp(ip): ClientIp, UrlPath(code): UrlPath<String>, Json(req): Json<PickReq>) -> ApiResult {
-    let a = album_by_code(&st, ip, &code)?;
-    if a.closed {
-        return Err(ApiError::new(StatusCode::FORBIDDEN, "摄影师已结束选片"));
-    }
-    let name = clean_name(&req.name, "名字")?;
-    let note: Option<String> = req.note.map(|n| n.trim().chars().take(NOTE_MAX).collect());
-    let count = st.db.set_pick(&a.id, &name, req.photo_id, req.picked, note.as_deref()).map_err(ApiError::bad)?;
-    Ok(Json(json!({ "count": count })))
-}
-
-#[derive(Deserialize)]
-struct SubmitReq {
-    name: String,
-    submitted: bool,
-}
-
-async fn share_submit(State(st): S, ClientIp(ip): ClientIp, UrlPath(code): UrlPath<String>, Json(req): Json<SubmitReq>) -> ApiResult {
-    let a = album_by_code(&st, ip, &code)?;
-    if a.closed {
-        return Err(ApiError::new(StatusCode::FORBIDDEN, "摄影师已结束选片"));
-    }
-    let name = clean_name(&req.name, "名字")?;
-    if req.submitted {
-        let n = st.db.pick_count(&a.id, &name)?;
-        if let Some(limit) = a.pick_limit {
-            if n > limit as usize {
-                return Err(ApiError::bad(format!("最多选 {limit} 张，现在选了 {n} 张")));
-            }
+async fn delete_photos(State(st): S, ClientIp(ip): ClientIp, UrlPath(code): UrlPath<String>, headers: HeaderMap, Json(req): Json<Ids>) -> ApiResult {
+    let a = owned(&st, ip, &code, &headers)?;
+    let done = st.db.delete_photos(&a.id, &req.ids)?;
+    for id in &done {
+        for kind in ['t', 'p'] {
+            let _ = tokio::fs::remove_file(photo_file(&st.photos_dir, &a.id, *id, kind)).await;
         }
     }
-    st.db.set_submitted(&a.id, &name, req.submitted)?;
-    Ok(Json(json!({ "ok": true })))
+    if !done.is_empty() {
+        st.hub.send(&a.id, json!({ "type": "deleted", "ids": done }));
+    }
+    Ok(Json(json!({ "deleted": done })))
+}
+
+#[derive(Deserialize)]
+struct StarReq {
+    ids: Vec<i64>,
+    starred: bool,
+    by: String,
+}
+
+async fn set_stars(State(st): S, ClientIp(ip): ClientIp, UrlPath(code): UrlPath<String>, Json(req): Json<StarReq>) -> ApiResult {
+    let a = album(&st, ip, &code)?;
+    if req.ids.len() > 10_000 {
+        return Err(ApiError::bad("一次太多了"));
+    }
+    let by = clean_name(&req.by, "名字")?;
+    let changed = st.db.set_stars(&a.id, &req.ids, req.starred, &by)?;
+    if !changed.is_empty() {
+        st.hub.send(&a.id, json!({ "type": "stars", "ids": changed, "starred": req.starred, "by": by }));
+    }
+    Ok(Json(json!({ "changed": changed })))
 }

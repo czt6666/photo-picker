@@ -55,6 +55,8 @@ export class Grid {
   private lastTop = 0;
   private fast = false;
   private fastTimer = 0;
+  /** 上一次按下是手指（手指轻点 = 打开，鼠标单击 = 选中） */
+  private touchTap = false;
 
   constructor(
     private el: HTMLElement,
@@ -68,6 +70,14 @@ export class Grid {
       if ((e.target as HTMLElement).closest('.badge')) return; // 连点星标按钮不应打开大图
       const i = this.indexFromEvent(e);
       if (i >= 0) this.cb.open(i);
+    });
+    // 手机/平板：轻点打开大图，点星就加星（用 click 而不是 pointerdown，滑动滚屏时不会误触）
+    inner.addEventListener('click', (e) => {
+      if (!this.touchTap) return;
+      const i = this.indexFromEvent(e);
+      if (i < 0) return;
+      if ((e.target as HTMLElement).closest('.badge')) this.cb.toggleStar([store.visible[i]]);
+      else this.cb.open(i);
     });
     el.addEventListener('pointerdown', (e) => {
       // 点空白处取消选择
@@ -195,7 +205,8 @@ export class Grid {
   // ---------------------------------------------------------------------------
 
   private onPointerDown(e: PointerEvent): void {
-    if (e.button !== 0) return;
+    this.touchTap = e.pointerType === 'touch';
+    if (this.touchTap || e.button !== 0) return;
     const i = this.indexFromEvent(e);
     if (i < 0) return;
     if ((e.target as HTMLElement).closest('.badge')) {
@@ -326,7 +337,7 @@ export class Grid {
     const c = document.createElement('div');
     c.className = 'cell';
     c.innerHTML =
-      `<span class="frame"><img class="thumb" decoding="async" draggable="false" alt=""><button class="badge" tabindex="-1" title="${t('星标（空格）')}">★</button><span class="raw-tag"></span><span class="rate" hidden></span></span>`;
+      `<span class="frame"><img class="thumb" decoding="async" draggable="false" alt=""><button class="badge" tabindex="-1" title="${t('星标（空格）')}">★</button><span class="raw-tag"></span><span class="rate" hidden></span><span class="by" hidden></span></span>`;
     const img = c.querySelector('img')!;
     img.addEventListener('load', () => c.classList.add('loaded'));
     img.addEventListener('error', () => {
@@ -383,6 +394,11 @@ export class Grid {
     const rate = c.querySelector<HTMLElement>('.rate')!;
     if (rate.textContent !== stars) rate.textContent = stars;
     rate.hidden = !stars;
+    // 远程相册：谁加的星
+    const by = c.querySelector<HTMLElement>('.by')!;
+    const who = p.starred ? (p.starredBy ?? '') : '';
+    if (by.textContent !== who) by.textContent = who;
+    by.hidden = !who;
   }
 
   private recycle(c: HTMLElement): void {

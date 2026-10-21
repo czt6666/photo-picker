@@ -1,17 +1,20 @@
-// 摄影师上传：在浏览器里把原图压成“预览图 + 缩略图”，只上传这两个小文件。
+// 往远程相册上传：把原图压成“预览图 + 缩略图”，只上传这两个小文件。
 //
-// 为什么在浏览器里压，而不是把原图传上去让服务器压？算笔账：
-// 一次外拍 1000 张，JPG+RAW 每张约 35MB，原图一共 35GB。家用宽带上行一般 30~50Mbps，
-// 传完要两三个小时，服务器还得有 35GB 硬盘。而 2048 像素的预览图约 0.4MB，1000 张才 400MB，
-// 几分钟传完；模特在手机上看，2048 像素也已经比屏幕清楚了。
-// 原图一直留在摄影师电脑上，选完按“文件名清单”回去找就行（见 export.ts）。
+// 为什么不传原图？算笔账：一次外拍 1000 张，JPG+RAW 每张约 35MB，原图一共 35GB。
+// 家用宽带上行一般 30~50Mbps，传完要两三个小时，服务器还得有 35GB 硬盘。
+// 而 2048 像素的预览图约 0.4MB，1000 张才 400MB，几分钟传完；手机上看，2048 像素也已经比屏幕清楚了。
+// 原图一直留在摄影师电脑上，导出时按文件名对回去（见 api.ts 的 resolveOriginals）。
+//
+// 谁来压：桌面版用自带的解码器（macOS 上 RAW、HEIC 都认）；网页版在浏览器里压，RAW 抠出相机内置的 JPEG 预览。
 
+import { api, RAW_EXT } from './api';
+import { t } from './i18n';
 import { largestEmbeddedJpeg, jpegOrientation, rawOrientation } from './rawPreview';
+import { photoKey, remote, type UploadMeta } from './remote';
+import type { Photo } from './types';
 
 export const PREVIEW_PX = 2048;
 export const THUMB_PX = 512;
-
-const RAW_EXT = new Set('cr2 cr3 crw nef nrw arw srf sr2 dng raf orf rw2 rwl pef srw x3f 3fr fff iiq erf kdc mrw mos'.split(' '));
 /** 同名多个文件时，用哪个做预览（越小越优先）。RAW 最后：抠出来的内置 JPEG 有时偏小。 */
 const PREFER: Record<string, number> = { jpg: 0, jpeg: 0, jpe: 0, heic: 1, heif: 1, avif: 2, webp: 2, png: 3, tif: 4, tiff: 4 };
 
@@ -28,6 +31,10 @@ export interface PhotoGroup {
   source: SourceFile;
   /** 这一组所有原图文件名（同名 JPG + RAW） */
   originals: string[];
+  /** 除了做预览的那个以外的同名文件 */
+  companions: string[];
+  /** 这一组原图加起来多大 */
+  size: number;
 }
 
 function splitPath(path: string) {
@@ -67,6 +74,8 @@ export function groupFiles(files: SourceFile[]): PhotoGroup[] {
       folder: g.folder,
       source: { file: sorted[0].file, path: sorted[0].path },
       originals: g.files.map((f) => f.name).sort(),
+      companions: g.files.filter((f) => f !== sorted[0]).map((f) => f.name).sort(),
+      size: g.files.reduce((n, f) => n + (f.file.size || 0), 0),
     });
   }
   return out;
@@ -121,7 +130,7 @@ function drawOriented(ctx: CanvasRenderingContext2D, src: CanvasImageSource, w: 
 
 function toJpeg(canvas: HTMLCanvasElement, quality: number): Promise<Blob> {
   return new Promise((resolve, reject) =>
-    canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('JPEG 编码失败'))), 'image/jpeg', quality),
+    canvas.toBlob((b) => (b ? resolve(b) : reject(new Error(t('JPEG 编码失败')))), 'image/jpeg', quality),
   );
 }
 
@@ -161,7 +170,7 @@ export async function compress(src: SourceFile): Promise<Compressed> {
     const bytes = new Uint8Array(await src.file.arrayBuffer());
     const jpg = largestEmbeddedJpeg(bytes);
     if (!jpg || Math.max(jpg.width, jpg.height) < 600) {
-      throw new Error('RAW 里没有可用的预览图，请同时选上同名 JPG');
+      throw new Error(t('RAW 里没有可用的预览图，请同时选上同名 JPG'));
     }
     // 内置 JPEG 自己带方向就交给浏览器转；不带就用 RAW 文件头里的方向
     if (!jpegOrientation(bytes, jpg.start, jpg.end)) orientation = rawOrientation(bytes) || 1;
@@ -171,7 +180,7 @@ export async function compress(src: SourceFile): Promise<Compressed> {
   try {
     img = await decode(blob);
   } catch {
-    throw new Error(ext === 'heic' || ext === 'heif' ? '这个浏览器打不开 HEIC，请用 Safari 或先转成 JPG' : '图片解不开，文件可能损坏');
+    throw new Error(ext === 'heic' || ext === 'heif' ? t('这个浏览器打不开 HEIC，请用 Safari 或先转成 JPG') : t('图片解不开，文件可能损坏'));
   }
   const { w, h } = size(img);
   const preview = shrink(img, w, h, PREVIEW_PX, orientation);
@@ -181,4 +190,75 @@ export async function compress(src: SourceFile): Promise<Compressed> {
   const result = { preview: pBlob, thumb: tBlob, width: preview.width, height: preview.height };
   preview.width = preview.height = thumb.width = thumb.height = 0; // 尽早释放显存（Safari 对 canvas 总内存有上限）
   return result;
+}
+
+/** 桌面版：用自带解码器压出 2048 预览，再在页面里缩出缩略图 */
+export async function compressLocal(p: Photo): Promise<Compressed> {
+  const bytes = await api.renderPreview(p.path, PREVIEW_PX);
+  const preview = new Blob([bytes], { type: 'image/jpeg' });
+  const img = await decode(preview);
+  const { w, h } = size(img);
+  const thumbCanvas = shrink(img, w, h, THUMB_PX, 1);
+  if (img instanceof ImageBitmap) img.close();
+  const thumb = await toJpeg(thumbCanvas, 0.76);
+  thumbCanvas.width = thumbCanvas.height = 0;
+  return { preview, thumb, width: w, height: h };
+}
+
+export interface UploadJob {
+  meta: Omit<UploadMeta, 'width' | 'height'>;
+  /** 显示在失败列表里的名字 */
+  label: string;
+  make(): Promise<Compressed>;
+}
+
+export function jobsFromLocal(photos: Photo[]): UploadJob[] {
+  return photos.map((p) => ({
+    meta: { key: photoKey('', p.name), name: p.name, folder: '', companions: p.companions, size: p.size },
+    label: p.name,
+    make: () => compressLocal(p),
+  }));
+}
+
+export function jobsFromFiles(files: SourceFile[]): UploadJob[] {
+  return groupFiles(files).map((g) => ({
+    meta: { key: g.key, name: g.source.file.name, folder: g.folder, companions: g.companions, size: g.size },
+    label: g.source.path,
+    make: () => compress(g.source),
+  }));
+}
+
+export interface UploadProgress {
+  done: number;
+  failed: { label: string; error: string }[];
+  skipped: number;
+  total: number;
+}
+
+/**
+ * 压缩 + 上传，2~4 张同时进行：压缩吃 CPU、上传吃网络，并行起来两边都不闲着；
+ * 再多内存会吃紧（一张 2400 万像素图解开约 100MB）。已经传过的（同 key）直接跳过，所以重传就是续传。
+ */
+export async function uploadJobs(code: string, jobs: UploadJob[], onProgress: (p: UploadProgress) => void, cancelled: () => boolean): Promise<UploadProgress> {
+  const have = remote.uploadedKeys(code);
+  const todo = jobs.filter((j) => !have.has(j.meta.key));
+  const prog: UploadProgress = { done: 0, failed: [], skipped: jobs.length - todo.length, total: todo.length };
+  onProgress(prog);
+  let next = 0;
+  const workers = Math.min(4, Math.max(2, Math.floor((navigator.hardwareConcurrency || 4) / 2)));
+  const work = async () => {
+    while (!cancelled() && next < todo.length) {
+      const job = todo[next++];
+      try {
+        const c = await job.make();
+        await remote.upload(code, { ...job.meta, width: c.width, height: c.height }, c.thumb, c.preview);
+        prog.done++;
+      } catch (e) {
+        prog.failed.push({ label: job.label, error: e instanceof Error ? e.message : String(e) });
+      }
+      onProgress(prog);
+    }
+  };
+  await Promise.all(Array.from({ length: workers }, work));
+  return prog;
 }

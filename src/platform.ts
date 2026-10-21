@@ -3,6 +3,13 @@
 
 import { t } from './i18n';
 
+/** 在桌面 App 里（Tauri）还是在普通浏览器里（网页版）。网页版没有本地图库，只有远程相册。 */
+export const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+export const isWeb = !isTauri;
+
+/** 触屏为主的设备（手机、平板） */
+export const isTouch = typeof matchMedia !== 'undefined' && matchMedia('(pointer: coarse)').matches;
+
 export const isMac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
 
 /** 修饰键的写法：Mac 上 `⌘E`，Windows 上 `Ctrl+E` */

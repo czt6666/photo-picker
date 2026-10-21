@@ -14,11 +14,15 @@ import type { Library, Photo, Progress } from './types';
 import { LANGS, langPref, setLang, t, translateDom, type Lang } from './i18n';
 import { closeMenu, contextMenu, esc, toast } from './ui';
 import { formatBytes, Viewer } from './viewer';
-import { isBrowserShortcut, isMac, mod as modKey, MOD_NAME, REVEAL_LABEL } from './platform';
+import { isBrowserShortcut, isMac, isTauri, isTouch, isWeb, mod as modKey, MOD_NAME, REVEAL_LABEL } from './platform';
+import { albumPath, isRemotePath, parseRemotePath, parseShareInput, remote, shareLink, type RemoteEvent } from './remote';
+import { confirmBox, continueUpload, copyText, ensureName, promptBox, showConnect, showCreate, stopUpload, uploadingCode } from './remoteUi';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
 translateDom(document);
+document.body.classList.toggle('web', isWeb);
+document.body.classList.toggle('touch', isTouch);
 
 const gridEl = $('grid');
 const emptyEl = $('empty');
@@ -62,12 +66,16 @@ const sidebar = new Sidebar($('sidebar'), {
   openFolder: (path) => void openFolder(path, isStarMode(store.view)),
   toggleStarred: () => toggleStarredView(),
   folderMenu(path, x, y) {
+    if (isRemotePath(path)) return remoteMenu(parseRemotePath(path).code, x, y);
     contextMenu(x, y, [
       { label: REVEAL_LABEL, action: () => void revealItemInDir(path).catch(() => {}) },
       { label: t('重新扫描'), action: () => void rescan() },
+      { label: t('共享为远程相册…'), action: () => createRemote(path) },
     ]);
   },
   workdirMenu: (x, y) => void showWorkdirMenu(x, y),
+  createRemote: () => createRemote(store.view.kind === 'folder' && !isRemotePath(store.view.path) ? store.view.path : null),
+  connectRemote: () => showConnect((a) => void afterRemoteAdded(a.code)),
 });
 
 // ---------------------------------------------------------------------------
@@ -103,7 +111,7 @@ async function showView(view: View, load: () => Promise<Photo[]>): Promise<boole
   lastChunk = photos;
   store.setPhotos(view, photos);
   if (view.kind === 'folder') lastFolder = view.path;
-  if (store.library.workdir) prefs.set(`lastView:${store.library.workdir}`, view);
+  prefs.set(`lastView:${store.library.workdir ?? ''}`, view);
   sidebar.render();
   grid.reset();
   renderChrome();
@@ -142,7 +150,8 @@ function nextAlbumPath(): string | null {
   const v = store.view;
   // 搜索时只在已经显示的相册里找，不往后接（否则没有结果时会把整个工作目录读一遍）
   if (v.kind !== 'folder' || store.query.trim() || !chain.length) return null;
-  const list = v.starredOnly ? store.library.folders.filter((f) => f.starred > 0 || chain.includes(f.path)) : store.library.folders;
+  const all = store.siblings(chain[chain.length - 1]);
+  const list = v.starredOnly ? all.filter((f) => f.starred > 0 || chain.includes(f.path)) : all;
   const i = list.findIndex((f) => f.path === chain[chain.length - 1]);
   return i >= 0 ? (list[i + 1]?.path ?? null) : null;
 }
@@ -177,7 +186,7 @@ function onSectionAtTop(dir: string): void {
   if (v.kind !== 'folder' || v.path === dir || !chain.includes(dir)) return;
   store.view = { ...v, path: dir };
   lastFolder = dir;
-  if (store.library.workdir) prefs.set(`lastView:${store.library.workdir}`, store.view);
+  prefs.set(`lastView:${store.library.workdir ?? ''}`, store.view);
   sidebar.render();
   renderTitle();
   updateStatus();
@@ -199,7 +208,13 @@ function renderTitle(): void {
   if (v.kind === 'folder') {
     const f = store.folder(v.path);
     const tag = v.starredOnly ? ` <span class="star">★</span> <span class="dim">${t('仅星标')} ·</span>` : '';
-    titleEl.innerHTML = `<b>${esc(f?.name ?? v.path.split(/[\\/]/).pop() ?? '')}</b>${tag} <span class="dim">${esc(v.path)}</span>`;
+    let sub = esc(v.path);
+    if (isRemotePath(v.path)) {
+      const code = parseRemotePath(v.path).code;
+      const names = remote.presence.get(code) ?? [];
+      sub = `☁ ${t('远程相册')}${names.length ? ` · ${t('在看：{names}', { names: esc(names.join('、')) })}` : ''}`;
+    }
+    titleEl.innerHTML = `<b>${esc(f?.name ?? v.path.split(/[\\/]/).pop() ?? '')}</b>${tag} <span class="dim">${sub}</span>`;
   } else if (v.kind === 'starred') {
     titleEl.innerHTML = `<b><span class="star">★</span> ${t('已加星标的照片')}</b> <span class="dim">${t('所有相册')}</span>`;
   } else {
@@ -209,13 +224,20 @@ function renderTitle(): void {
 
 function renderEmpty(): void {
   let html = '';
-  if (!store.library.workdir) {
+  if (isWeb && store.view.kind === 'none') {
+    html = `<div class="empty-card">
+      <div class="big">☁</div>
+      <h2>${t('PhotoPicker 网页版')}</h2>
+      <p class="dim">${t('打开别人发来的远程相册链接，或者把自己的照片传上来，发链接给别人一起挑。')}</p>
+      <div class="row center"><button class="btn primary" id="empty-connect">${t('连接远程相册…')}</button>
+      <button class="btn" id="empty-create">${t('创建远程相册…')}</button></div></div>`;
+  } else if (!store.library.workdir && !store.remoteFolders.length) {
     html = `<div class="empty-card">
       <div class="big">📁</div>
       <h2>${t('选择一个照片文件夹')}</h2>
       <p class="dim">${t('子文件夹会作为相册列在左侧，也可以把文件夹直接拖进来。')}</p>
       <button class="btn primary" id="empty-add">${t('选择文件夹…')}</button></div>`;
-  } else if (!store.library.folders.length) {
+  } else if (store.library.workdir && !store.library.folders.length && store.view.kind === 'none') {
     html = `<div class="empty-card"><h2>${t('这里没有找到照片')}</h2>
       <p class="dim">${esc(store.library.workdir)}</p>
       <button class="btn primary" id="empty-add">${t('换一个文件夹…')}</button></div>`;
@@ -233,6 +255,8 @@ function renderEmpty(): void {
   emptyEl.hidden = !html;
   gridEl.hidden = !!html;
   emptyEl.querySelector('#empty-add')?.addEventListener('click', () => void chooseWorkdir());
+  emptyEl.querySelector('#empty-connect')?.addEventListener('click', () => showConnect((a) => void afterRemoteAdded(a.code)));
+  emptyEl.querySelector('#empty-create')?.addEventListener('click', () => createRemote(null));
 }
 
 function updateStatus(): void {
@@ -272,6 +296,9 @@ function starTargets(): Photo[] {
 async function toggleStar(photos: Photo[]): Promise<void> {
   const { starred: target, changed } = planToggle(photos);
   if (!changed.length) return;
+  // 远程相册的星标大家共用、会显示是谁加的：第一次先问名字
+  if (changed.some((p) => p.remote) && !(await ensureName())) return;
+  changed.forEach((p) => p.remote && (p.starredBy = target ? remote.name : null));
   // 先改界面（乐观更新），写盘失败再改回来：按下 S 的瞬间就要看到星星
   changed.forEach((p) => (p.starred = target));
   grid.refreshCells();
@@ -308,6 +335,10 @@ async function toggleStar(photos: Photo[]): Promise<void> {
 
 /** 星级（Lightroom 的星级）：数字键 1～5 标成几星，已经全是这个星级时再按一次 = 清除；0 = 清除。不动星标。 */
 async function rate(photos: Photo[], n: number): Promise<void> {
+  if (photos.some((p) => p.remote)) {
+    toast(t('远程相册只用星标挑选，不支持星级'), 'warn');
+    photos = photos.filter((p) => !p.remote);
+  }
   const { rating, changed } = planRate(photos, n);
   if (!changed.length) return;
   const before = new Map(changed.map((p) => [p, p.rating]));
@@ -415,10 +446,10 @@ function applyWorkdir(lib: Library): void {
 
 /** 打开该工作目录上次看的相册；打不开（被删、改名、磁盘没插）就退到第一个相册，再不行显示空状态 */
 async function openInitialView(lib: Library): Promise<void> {
-  const last = lib.workdir ? prefs.get<View>(`lastView:${lib.workdir}`, { kind: 'none' }) : { kind: 'none' as const };
+  const last = prefs.get<View>(`lastView:${lib.workdir ?? ''}`, { kind: 'none' });
   if (last.kind === 'starred' && (await openStarred())) return;
-  if (last.kind === 'folder' && lib.folders.some((f) => f.path === last.path) && (await openFolder(last.path, !!last.starredOnly))) return;
-  for (const f of lib.folders.slice(0, 3)) {
+  if (last.kind === 'folder' && store.folder(last.path) && (await openFolder(last.path, !!last.starredOnly))) return;
+  for (const f of [...lib.folders.slice(0, 3), ...store.remoteFolders.slice(0, 1)]) {
     if (f.path !== (last.kind === 'folder' ? last.path : '') && (await openFolder(f.path))) return;
   }
   showEmptyView();
@@ -497,7 +528,7 @@ function toggleStarredView(): void {
     void openFolder(v.path);
     return;
   }
-  const back = lastFolder && store.folder(lastFolder) ? lastFolder : store.library.folders[0]?.path;
+  const back = lastFolder && store.folder(lastFolder) ? lastFolder : (store.library.folders[0] ?? store.remoteFolders[0])?.path;
   if (back) void openFolder(back);
   else showEmptyView();
 }
@@ -588,6 +619,10 @@ function showSettings(): void {
     .join('');
   el.innerHTML = `<div class="modal-card help settings"><h2>${t('设置')}</h2>
     <div class="field"><label class="lang">${t('语言')} <select class="input">${opts}</select></label></div>
+    <div class="field"><div class="label">${t('远程相册')}</div>
+      <label class="lang">${t('你的名字')} <input class="input s-name" maxlength="40" value="${esc(remote.name)}"></label>
+      ${isTauri ? `<label class="lang">${t('服务器')} <input class="input s-server" placeholder="https://…" value="${esc(remote.defaultServer)}" spellcheck="false"></label>` : ''}
+    </div>
     <div class="actions"><button class="btn primary">${t('关闭')}</button></div></div>`;
   el.hidden = false;
   const close = () => {
@@ -596,61 +631,13 @@ function showSettings(): void {
   };
   el.querySelector('button')!.addEventListener('click', close);
   el.querySelector('select')!.addEventListener('change', (e) => setLang(((e.target as HTMLSelectElement).value || null) as Lang | null));
+  el.querySelector<HTMLInputElement>('.s-name')!.addEventListener('change', (e) => (remote.name = (e.target as HTMLInputElement).value));
+  el.querySelector<HTMLInputElement>('.s-server')?.addEventListener('change', (e) => (remote.defaultServer = (e.target as HTMLInputElement).value));
   el.onclick = (e) => e.target === el && close();
 }
 $('btn-settings').addEventListener('click', showSettings);
 
-/**
- * 导入选片清单：在线选片（模特在网页上选）导出的 .txt，或粘贴的文件名。
- * 对上的本机原图加星标，再跳到星标相册，接着就能“导出…”原图（带 RAW）去修。
- */
-function showImportPickList(): void {
-  const el = $('export-dialog');
-  el.innerHTML = `<div class="modal-card"><h2>${t('导入选片清单')}</h2>
-    <div class="field"><div class="hint dim">${t('在线选片下载的 .txt，或粘贴文件名（空格、逗号、换行隔开都行）。对上的原图会加星标。')}</div>
-    <textarea class="input picklist" rows="7" spellcheck="false" placeholder="DSC_0001 DSC_0005 …"></textarea></div>
-    <div class="actions"><button class="btn pick-file">${t('选择文件…')}</button><span class="spacer"></span>
-    <button class="btn cancel">${t('取消')}</button><button class="btn primary ok">${t('加星标')}</button></div></div>`;
-  el.hidden = false;
-  const close = () => {
-    el.hidden = true;
-    el.innerHTML = '';
-  };
-  const ta = el.querySelector('textarea')!;
-  ta.focus();
-  const run = async (text: string | null, file: string | null) => {
-    if (!store.library.workdir) return toast(t('请先选择工作目录'), 'error');
-    try {
-      const m = await api.matchPickList(text, file);
-      if (!m.paths.length) {
-        toast(t('一张都没对上：请先打开这次拍摄的文件夹'), 'error', 5000);
-        return;
-      }
-      close();
-      const r = await store.queueStarWrite(() => api.setStar(m.paths, true));
-      for (const [dir, n] of Object.entries(r.folders)) {
-        const f = store.folder(dir);
-        if (f) f.starred = n;
-      }
-      sidebar.render();
-      await openStarred();
-      let msg = t('已给 {n} 张加星标', { n: m.paths.length });
-      if (m.missing.length) msg += t('，{n} 个没找到：{names}', { n: m.missing.length, names: m.missing.slice(0, 5).join(' ') + (m.missing.length > 5 ? ' …' : '') });
-      if (m.ambiguous) msg += t('（{n} 个文件名在多个文件夹里都有，都标上了）', { n: m.ambiguous });
-      toast(msg, m.missing.length ? 'warn' : 'info', 7000);
-    } catch (e) {
-      toast(String(e), 'error', 5000);
-    }
-  };
-  el.querySelector('.cancel')!.addEventListener('click', close);
-  el.querySelector('.ok')!.addEventListener('click', () => void run(ta.value, null));
-  el.querySelector('.pick-file')!.addEventListener('click', async () => {
-    const f = await openDialog({ multiple: false, filters: [{ name: t('选片清单'), extensions: ['txt', 'csv'] }] });
-    if (typeof f === 'string') void run(null, f);
-  });
-  el.onclick = (e) => e.target === el && close();
-}
-$('btn-import').addEventListener('click', showImportPickList);
+
 $('btn-settings').title = `${t('设置')}（${modKey(',')}）`;
 
 gridEl.addEventListener('contextmenu', (e) => {
@@ -662,12 +649,13 @@ gridEl.addEventListener('contextmenu', (e) => {
   if (!store.selection.has(p.path)) grid.selectIndex(i, 'single');
   const targets = starTargets();
   const allStarred = targets.every((x) => x.starred);
-  contextMenu(e.clientX, e.clientY, [
+  const items = [
     { label: t('查看大图'), action: () => openViewer(i) },
     { label: allStarred ? t('取消星标') : t('加星标'), action: () => void toggleStar(targets) },
-    { label: REVEAL_LABEL, action: () => void revealItemInDir(p.path).catch(() => {}) },
-    { label: t('导出…'), action: () => openExportDialog() },
-  ]);
+  ];
+  if (isTauri && !isRemotePath(p.path)) items.push({ label: REVEAL_LABEL, action: () => void revealItemInDir(p.path).catch(() => {}) });
+  if (isTauri) items.push({ label: t('导出…'), action: () => openExportDialog() });
+  contextMenu(e.clientX, e.clientY, items);
 });
 
 // 屏蔽 webview 自带的右键菜单（“重新载入”等），输入框除外
@@ -676,7 +664,7 @@ document.addEventListener('contextmenu', (e) => {
 });
 
 // 启动时先显示上次的图库缓存，后台扫描完成后在这里更新（新增/删除的文件夹、照片数）
-void listen<Library>('library-updated', (e) => {
+if (isTauri) void listen<Library>('library-updated', (e) => {
   setLibrary(e.payload);
   const v = store.view;
   if ((v.kind === 'folder' && !store.folder(v.path)) || (v.kind === 'none' && e.payload.folders.length)) {
@@ -686,19 +674,196 @@ void listen<Library>('library-updated', (e) => {
   }
 });
 
-void listen<Progress>('thumb-progress', (e) => {
+if (isTauri) void listen<Progress>('thumb-progress', (e) => {
   const { done, total } = e.payload;
   thumbsEl.textContent = total && done < total ? t('正在生成缩略图 {done} / {total}', { done, total }) : '';
 });
 
 // 把文件夹拖进窗口 = 添加到图库
-void getCurrentWebview()
+if (isTauri) void getCurrentWebview()
   .onDragDropEvent((e) => {
     document.body.classList.toggle('drop-target', e.payload.type === 'over' || e.payload.type === 'enter');
     // 拖进来一个文件夹（或其中的照片）= 把它设为工作目录
     if (e.payload.type === 'drop' && e.payload.paths.length) void switchWorkdir(e.payload.paths[0]);
   })
   .catch(() => {});
+
+// ---------------------------------------------------------------------------
+// 远程相册
+// ---------------------------------------------------------------------------
+
+/** 把 remote.ts 里的相册列表同步到侧栏 */
+function syncRemote(): void {
+  store.remoteFolders = remote.folders();
+  sidebar.render();
+}
+
+function createRemote(sourceDir: string | null): void {
+  showCreate(
+    sourceDir,
+    (a) => void afterRemoteAdded(a.code),
+    (text) => (thumbsEl.textContent = text),
+  );
+}
+
+async function afterRemoteAdded(code: string): Promise<void> {
+  syncRemote();
+  closeDrawer();
+  await openFolder(albumPath(code));
+}
+
+async function connectAndOpen(link: string): Promise<boolean> {
+  try {
+    const a = await remote.connect(link);
+    await afterRemoteAdded(a.code);
+    return true;
+  } catch (e) {
+    toast(e instanceof Error ? e.message : String(e), 'error', 6000);
+    return false;
+  }
+}
+
+function remoteMenu(code: string, x: number, y: number): void {
+  const a = remote.get(code);
+  if (!a) return;
+  const owner = !!a.ownerToken;
+  const progress = (text: string) => (thumbsEl.textContent = text);
+  contextMenu(x, y, [
+    {
+      label: t('复制链接'),
+      detail: shareLink(a),
+      action: () => void copyText(shareLink(a)).then((ok) => ok && toast(t('链接已复制，发给别人就能一起挑'))),
+    },
+    ...(owner
+      ? [
+          uploadingCode() === code
+            ? { label: t('停止上传'), action: () => stopUpload() }
+            : { label: t('继续上传…'), detail: a.sourceDir ?? '', action: () => void continueUpload(a, progress) },
+          {
+            label: t('改名…'),
+            action: async () => {
+              const name = await promptBox(t('相册名'), a.name);
+              if (!name) return;
+              try {
+                await remote.rename(code, name);
+                syncRemote();
+                renderTitle();
+              } catch (e) {
+                toast(String(e), 'error');
+              }
+            },
+          },
+        ]
+      : []),
+    { label: t('从列表中移除'), action: () => forgetRemote(code) },
+    ...(owner
+      ? [
+          {
+            label: t('删除远程相册…'),
+            action: async () => {
+              if (!(await confirmBox(t('删除远程相册「{name}」？', { name: a.name }), t('服务器上的预览和所有人的星标都会删掉，你电脑上的原图不受影响。'), t('删除')))) return;
+              try {
+                await remote.destroy(code);
+                forgetRemote(code);
+              } catch (e) {
+                toast(String(e), 'error');
+              }
+            },
+          },
+        ]
+      : []),
+  ]);
+}
+
+function forgetRemote(code: string): void {
+  remote.forget(code);
+  syncRemote();
+  const v = store.view;
+  if (v.kind === 'folder' && v.path === albumPath(code)) toggleOrEmpty();
+}
+
+/** 当前相册没了：回到别的相册，没有就显示空状态 */
+function toggleOrEmpty(): void {
+  const next = store.library.folders[0] ?? store.remoteFolders[0];
+  if (next) void openFolder(next.path);
+  else showEmptyView();
+}
+
+let reloadTimer = 0;
+/** 别人的改动推过来了：更新界面 */
+function onRemoteEvent(code: string, ev: RemoteEvent): void {
+  syncRemote();
+  const dir = albumPath(code);
+  const showing = store.all.some((p) => p.dir === dir) || (store.view.kind === 'folder' && store.view.path === dir);
+  if (ev.type === 'stars') {
+    const ids = new Set(ev.ids);
+    for (const p of store.all) {
+      if (p.remote?.code === code && ids.has(p.remote.id)) {
+        p.starred = ev.starred;
+        p.starredBy = ev.starred ? ev.by : null;
+      }
+    }
+    grid.refreshCells();
+    viewer.refreshStar();
+    updateStatus();
+    // 星标筛选下别人取消了星：照片消失（看大图时先不动）
+    if (isStarMode(store.view) && !viewer.opened && !ev.starred && showing) {
+      store.refilter();
+      grid.reset(true);
+      renderEmpty();
+      updateStatus();
+    }
+  } else if (ev.type === 'presence' || ev.type === 'album') {
+    if (showing) renderTitle();
+  } else if (ev.type === 'gone') {
+    toast(t('远程相册「{name}」已被创建者删除', { name: store.folder(dir)?.name ?? code }), 'warn', 5000);
+    forgetRemote(code);
+  } else if (showing && !viewer.opened) {
+    // 新传了照片 / 删了照片 / 重连：攒一下再整体刷新（上传时每秒好几张）
+    clearTimeout(reloadTimer);
+    reloadTimer = window.setTimeout(() => void reloadRemoteView(), 600);
+  }
+}
+
+async function reloadRemoteView(): Promise<void> {
+  const v = store.view;
+  if (viewer.opened || v.kind === 'none') return;
+  const seq = viewSeq;
+  try {
+    const photos = v.kind === 'starred' ? await api.listStarred() : await api.listFolder(v.path);
+    if (seq !== viewSeq || viewer.opened) return;
+    store.all = photos;
+    chain = v.kind === 'folder' ? [v.path] : [];
+    chainEnded = false;
+    store.refilter();
+    grid.reset(true);
+    renderChrome();
+  } catch {
+    /* 下次再说 */
+  }
+}
+
+remote.onEvent(onRemoteEvent);
+
+// ---------- 窄屏（手机）：侧栏是抽屉 ----------
+
+const menuBtn = $<HTMLButtonElement>('btn-menu');
+function closeDrawer(): void {
+  document.body.classList.remove('drawer-open');
+}
+menuBtn.addEventListener('click', () => document.body.classList.toggle('drawer-open'));
+$('drawer-mask').addEventListener('click', closeDrawer);
+$('sidebar').addEventListener('click', (e) => {
+  if ((e.target as HTMLElement).closest('.sb-item')) closeDrawer();
+});
+
+// 粘贴链接 = 连接远程相册（在没有输入框获得焦点时）
+document.addEventListener('paste', (e) => {
+  const tag = (e.target as HTMLElement).tagName;
+  if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+  const text = e.clipboardData?.getData('text') ?? '';
+  if (parseShareInput(text, '') && /\/r\//.test(text)) void connectAndOpen(text);
+});
 
 // ---------------------------------------------------------------------------
 // 快捷键
@@ -714,7 +879,7 @@ window.addEventListener('keydown', (e) => {
   if (isExportOpen()) {
     if (k === 'Escape') {
       closeExportDialog();
-      if (!$('export-dialog').querySelector('.help')) return;
+      if (!$('export-dialog').querySelector('.help, .remote-dlg')) return;
       $('export-dialog').hidden = true;
       $('export-dialog').innerHTML = '';
     }
@@ -739,9 +904,9 @@ window.addEventListener('keydown', (e) => {
   let handled = true;
   if (mod && k.toLowerCase() === 'a') grid.selectAll();
   else if (mod && k === '8') void toggleStar(starTargets());
-  else if (mod && k.toLowerCase() === 'e') openExportDialog();
+  else if (mod && k.toLowerCase() === 'e') isTauri && openExportDialog();
   else if (mod && k.toLowerCase() === 'f') search.focus();
-  else if (mod && k.toLowerCase() === 'o') void chooseWorkdir();
+  else if (mod && k.toLowerCase() === 'o') isTauri && void chooseWorkdir();
   else if (mod && k === ',') showSettings();
   else if (mod) handled = false;
   else if (k === 'ArrowRight') grid.moveFocus(1, 0, e.shiftKey);
@@ -777,6 +942,15 @@ async function boot(): Promise<void> {
     return;
   }
   setLibrary(lib);
+  syncRemote();
+  remote.subscribeAll();
+  // 网页版通过 /r/<相册码> 打开：自动连上并打开这个相册
+  const m = location.pathname.match(/^\/r\/([0-9A-Za-z]{4,12})/);
+  if (m) {
+    const ok = await connectAndOpen(`${location.origin}/r/${m[1]}`);
+    history.replaceState(null, '', '/');
+    if (ok) return;
+  }
   await openInitialView(lib);
   gridEl.focus({ preventScroll: true });
 }

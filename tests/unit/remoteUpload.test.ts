@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { groupFiles, SourceFile } from '../src/upload';
+import { groupFiles, SourceFile } from '../../src/remoteUpload';
 
 const f = (path: string): SourceFile => ({ file: { name: path.split('/').pop() } as File, path });
 

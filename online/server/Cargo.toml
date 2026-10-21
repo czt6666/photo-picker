@@ -1,13 +1,14 @@
 [package]
 name = "photo-picker-online"
 version = "0.1.0"
-description = "PhotoPicker 在线选片：摄影师上传压缩预览，模特凭共享码在手机/平板/电脑上选片"
+description = "PhotoPicker 远程相册服务：存压缩预览、共用星标、实时推送"
 edition = "2021"
 
 [dependencies]
-axum = { version = "0.8", features = ["multipart"] }
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "fs", "net", "signal"] }
-tower-http = { version = "0.6", features = ["fs", "set-header"] }
+axum = { version = "0.8", features = ["multipart", "ws"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "fs", "net", "signal", "sync", "time"] }
+tower-http = { version = "0.6", features = ["fs", "set-header", "cors"] }
+futures-util = { version = "0.3", default-features = false, features = ["sink"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rusqlite = { version = "0.37", features = ["bundled"] }
@@ -18,6 +19,7 @@ rand = "0.9"
 tempfile = "3"
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
+tokio-tungstenite = "0.28"
 
 [profile.release]
 codegen-units = 1
