@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#141518" />
+    <title>选片</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body class="pick-page">
+    <div id="loading" class="center-msg dim" data-en="Loading…">加载中…</div>
+
+    <form id="gate" class="gate card" hidden>
+      <h2 id="gate-album"></h2>
+      <p class="dim" id="gate-info"></p>
+      <label>
+        <span data-en="Your name (the photographer sees it)">你的名字（摄影师会看到）</span>
+        <input id="gate-name" maxlength="40" autocomplete="name" required />
+      </label>
+      <button class="btn primary big" type="submit" data-en="Start picking">开始选片</button>
+    </form>
+
+    <div id="app" hidden>
+      <header class="bar">
+        <div class="bar-title">
+          <b id="album-name"></b>
+          <button id="who" class="link dim" data-en-title="Change name" title="换个名字"></button>
+        </div>
+        <div class="seg" id="filter">
+          <button data-f="all" class="on"><span data-en="All">全部</span> <span id="n-all"></span></button>
+          <button data-f="picked"><span data-en="Picked">已选</span> <span id="n-picked"></span></button>
+        </div>
+        <button id="submit" class="btn primary" data-en="Done">选好了</button>
+      </header>
+      <div id="banner" class="banner" hidden></div>
+      <main id="grid" class="grid"></main>
+      <div id="empty" class="center-msg dim" hidden></div>
+    </div>
+    <script type="module" src="/src/pick.ts"></script>
+  </body>
+</html>
