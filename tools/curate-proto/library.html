@@ -1,11 +1,12 @@
+<meta charset="utf-8">
 <title>全库精选</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500&family=Noto+Sans+SC:wght@400;600;800&display=swap">
 <style>
-/* 布局：一行统计 + 模型切换 + 轮播按钮，下面是选中照片的样片墙；点任意一张或「轮播」进全屏 */
+/* 布局：一行统计 + 模型切换 + 轮播按钮，下面是选中照片的样片墙；点任意一张看大图，「轮播」全屏自动播 */
 :root {
   --bg: #f3f2ef; --panel: #ffffff; --fg: #1d1c1a; --muted: #6d6a63; --line: #dcd9d2;
-  --accent: #c2410c; --shade: rgba(12, 11, 10, 0.94);
+  --accent: #c2410c;
   --sans: "Noto Sans SC", -apple-system, "PingFang SC", sans-serif;
   --mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
 }
@@ -33,7 +34,8 @@ figcaption { padding: 6px 9px 8px; font-size: .76rem; display: grid; gap: 1px; m
 .row { display: flex; justify-content: space-between; gap: 8px; }
 .score { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 .album { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--muted); }
-.agree { color: var(--accent); white-space: nowrap; }
+.agree { color: var(--accent); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.agree.no { color: var(--muted); }
 .kind { white-space: nowrap; color: var(--muted); }
 .kind.p { color: var(--accent); }
 h2 { font-size: 1.1rem; font-weight: 600; margin: 0; display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
@@ -44,14 +46,6 @@ section { display: grid; gap: 12px; }
 .sub button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
 .small { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
 [hidden] { display: none !important; }
-#show { position: fixed; inset: 0; background: var(--shade); z-index: 20; display: grid; grid-template-rows: 1fr auto;
-  padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px); }
-#show img { width: 100%; height: 100%; object-fit: contain; min-height: 0; transition: opacity .5s; }
-#show .cap { color: #e9e5dd; text-align: center; padding: 10px 16px 14px; font-size: .85rem; }
-#show .cap span { color: #a39d92; }
-#show .x { position: absolute; top: calc(12px + env(safe-area-inset-top, 0px)); right: calc(14px + env(safe-area-inset-right, 0px));
-  background: none; border: 0; color: #e9e5dd; font-size: 1.6rem; cursor: pointer; }
-@media (prefers-reduced-motion: reduce) { #show img { transition: none; } }
 </style>
 
 <main>
@@ -64,7 +58,9 @@ section { display: grid; gap: 12px; }
   <div class="sub" id="mode" role="group" aria-label="范围">
     <button type="button" id="mode-all" data-m="all">全部照片</button>
     <button type="button" id="mode-wall" data-m="wall">壁纸：不含人</button>
+    <button type="button" id="mode-top" data-m="top">对照：纯按分数</button>
   </div>
+  <p class="lead" id="modelead"></p>
   <div class="grid" id="grid"></div>
   <section>
     <h2>人像识别抽查 <small id="kinds"></small></h2>
@@ -73,19 +69,29 @@ section { display: grid; gap: 12px; }
     <div class="grid small" id="kgrid"></div>
   </section>
 </main>
-<div id="show" hidden>
-  <img id="show-img" alt="">
-  <div class="cap" id="show-cap"></div>
-  <button class="x" id="show-x" type="button" aria-label="关闭轮播">×</button>
-</div>
-
+<script src="big/index.js"></script>
 <script>
+/*BIGVIEW*/
 const DATA = /*DATA*/null;
 const $ = (id) => document.getElementById(id);
 const KEYS = Object.keys(DATA.runs);
 let cur = DATA.runs.v25 ? "v25" : KEYS[0], mode = "all", kind = "人像";
 try { const s = localStorage.getItem("library-model2"); if (s && DATA.runs[s]) cur = s; } catch (e) {}
-const list = () => DATA.runs[cur][mode];
+const list = () => DATA.runs[cur][mode] || [];
+const base = (q) => q.name.split("/").pop();
+
+// 纯按分数的前几名里，没进精选的大概是因为什么。精确原因要看去重时的相似度，网页里没有，这里按时间和相册推断
+function whyNot(i) {
+  const picked = DATA.runs[cur].all;
+  if (picked.includes(i)) return ["已入选", true];
+  const p = DATA.photos[i], P = picked.map((j) => DATA.photos[j]).filter((q) => q.album === p.album);
+  const same = P.find((q) => base(q) === base(p));
+  if (same) return ["同一张的另一版本已入选（" + same.name.split("/").slice(1, -1).join("/") + "）", false];
+  const burst = p.time != null && P.find((q) => q.time != null && Math.abs(q.time - p.time) <= 90);
+  if (burst) return ["和入选的 " + base(burst) + " 只差 " + Math.round(Math.abs(burst.time - p.time)) + " 秒，多半是连拍", false];
+  if (P.length >= DATA.cap) return ["这个相册已选满 " + DATA.cap + " 张", false];
+  return ["画质没过，或和已选的太像", false];
+}
 
 function card(i, onclick, big) {
   const p = DATA.photos[i];
@@ -99,9 +105,14 @@ function card(i, onclick, big) {
   sc.textContent = big ? DATA.names[cur] + " " + (p.aes[cur] ?? "–") : p.why;
   row.appendChild(sc);
   if (big) {
-    const agree = KEYS.filter((k) => DATA.runs[k][mode].includes(i));
     const a = document.createElement("span"); a.className = "agree";
-    if (agree.length > 1) a.textContent = agree.length === KEYS.length ? "全部模型都选" : agree.length + " 个模型都选";
+    if (mode === "top") {
+      const [t, inn] = whyNot(i);
+      a.textContent = t; a.title = t; if (!inn) a.classList.add("no");
+    } else {
+      const agree = KEYS.filter((k) => DATA.runs[k][mode].includes(i));
+      if (agree.length > 1) a.textContent = agree.length === KEYS.length ? "全部模型都选" : agree.length + " 个模型都选";
+    }
     row.appendChild(a);
   }
   c.appendChild(row);
@@ -120,50 +131,34 @@ function render() {
   document.querySelectorAll("#bar button[data-k]").forEach((b) => b.setAttribute("aria-pressed", b.dataset.k === cur));
   document.querySelectorAll("#mode button").forEach((b) => b.setAttribute("aria-pressed", b.dataset.m === mode));
   const L = list();
-  const shared = L.filter((i) => KEYS.every((k) => DATA.runs[k][mode].includes(i))).length;
+  const shared = mode === "top" ? L.filter((i) => r.all.includes(i)).length
+    : L.filter((i) => KEYS.every((k) => (DATA.runs[k][mode] || []).includes(i))).length;
   $("stats").innerHTML = [
-    [DATA.n, "张照片"], [DATA.albums, "个相册"], [r.groups, "去重后剩几组"], [L.length, "选中"],
-    [shared, "全部模型都选了"], [r.ms != null ? r.ms + " ms" : "–", "每张打分耗时"],
+    [DATA.n, "张照片"], [DATA.albums, "个相册"], [r.groups, "去重后剩几组"], [L.length, mode === "top" ? "分数最高的" : "选中"],
+    [shared, mode === "top" ? "其中进了精选" : "全部模型都选了"], [r.ms != null ? r.ms + " ms" : "–", "每张打分耗时"],
   ].map(([v, l]) => '<div class="stat"><b>' + v + '</b><span>' + l + '</span></div>').join("");
   const g = $("grid"); g.replaceChildren();
-  L.forEach((i, pos) => g.appendChild(card(i, () => play(pos), true)));
+  L.forEach((i, pos) => g.appendChild(card(i, () => view(L, pos), true)));
+  $("modelead").textContent = {
+    all: "排列顺序就是挑选顺序。第一张是全库分最高的；之后每一步都在「分高」和「跟已选的不像」之间取舍，所以越往后越不是按分数排。",
+    wall: "同样的挑法，只是候选里去掉了检测到人的照片。",
+    top: "不去连拍、不限相册、不管像不像，直接取这个模型分数最高的 " + L.length + " 张，按分数从高到低。右上角写着它有没有进精选，没进的大概是什么原因。",
+  }[mode];
 }
+const items = (L) => L.map((i) => ({ i, rel: DATA.photos[i].name, src: DATA.photos[i].src }));
+const capOf = (it) => {
+  const p = DATA.photos[it.i];
+  return p.name + "　" + p.kind + "　" + KEYS.map((k) => DATA.names[k] + " " + (p.aes[k] ?? "–")).join("　");
+};
+function view(L, pos) { BigView.open(items(L), pos, { cap: capOf }); }
 function renderKinds() {
   document.querySelectorAll("#kindbar button").forEach((b) => b.setAttribute("aria-pressed", b.dataset.k === kind));
   const g = $("kgrid"); g.replaceChildren();
-  DATA.sample[kind].forEach((i) => g.appendChild(card(i, null, false)));
+  DATA.sample[kind].forEach((i, pos) => g.appendChild(card(i, () => view(DATA.sample[kind], pos), false)));
 }
-
-let timer = null, at = 0;
-function showAt(pos) {
-  const L = list();
-  at = (pos + L.length) % L.length;
-  const p = DATA.photos[L[at]];
-  $("show-img").src = p.src; $("show-img").alt = p.name;
-  $("show-cap").replaceChildren(p.album + "　", Object.assign(document.createElement("span"), { textContent: (at + 1) + " / " + L.length + "　←→ 切换，空格暂停" }));
-}
-function play(pos) {
-  if (!list().length) return;
-  $("show").hidden = false; showAt(pos || 0);
-  clearInterval(timer); timer = setInterval(() => showAt(at + 1), 4000);
-  try { $("show").requestFullscreen && $("show").requestFullscreen().catch(() => {}); } catch (e) {}
-}
-function stop() {
-  $("show").hidden = true; clearInterval(timer); timer = null;
-  try { document.fullscreenElement && document.exitFullscreen().catch(() => {}); } catch (e) {}
-}
-$("show-x").onclick = stop;
-$("show-img").onclick = () => showAt(at + 1);
-document.addEventListener("keydown", (e) => {
-  if ($("show").hidden) return;
-  if (e.key === "Escape") stop();
-  else if (e.key === "ArrowRight") showAt(at + 1);
-  else if (e.key === "ArrowLeft") showAt(at - 1);
-  else if (e.key === " ") { e.preventDefault(); if (timer) { clearInterval(timer); timer = null; } else timer = setInterval(() => showAt(at + 1), 4000); }
-});
 
 $("title").textContent = "全库精选 · " + DATA.root;
-$("lead").textContent = "从 " + DATA.albums + " 个相册的 " + DATA.n + " 张照片里，每个模型各挑 " + DATA.k + " 张。连拍和几乎一样的只留一张，每个相册最多 " + DATA.cap + " 张。「壁纸」那组只用一个人都没检测到的照片。照片原地没动。各模型的分数刻度不同，只在同一个模型里比高低。";
+$("lead").textContent = "从 " + DATA.albums + " 个相册的 " + DATA.n + " 张照片里，每个模型各挑 " + DATA.k + " 张。连拍和几乎一样的只留一张，每个相册最多 " + DATA.cap + " 张。「壁纸」那组只用一个人都没检测到的照片。照片原地没动。各模型的分数刻度不同，只在同一个模型里比高低。点照片看大图。";
 $("kinds").textContent = Object.entries(DATA.kinds).map(([k, v]) => k + " " + v + " 张").join(" · ");
 KEYS.forEach((k) => {
   const b = document.createElement("button");
@@ -172,7 +167,7 @@ KEYS.forEach((k) => {
   $("bar").appendChild(b);
 });
 const pb = document.createElement("button");
-pb.type = "button"; pb.className = "play"; pb.id = "play"; pb.textContent = "▶ 轮播"; pb.onclick = () => play(0);
+pb.type = "button"; pb.className = "play"; pb.id = "play"; pb.textContent = "▶ 轮播"; pb.onclick = () => BigView.open(items(list()), 0, { cap: capOf, play: true });
 $("bar").appendChild(pb);
 document.querySelectorAll("#mode button").forEach((b) => (b.onclick = () => { mode = b.dataset.m; render(); }));
 ["人像", "有人", "无人"].forEach((k) => {

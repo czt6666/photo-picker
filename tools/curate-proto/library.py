@@ -312,7 +312,9 @@ def main():
             continue
         a, g = select(feat, key, albums, ok, times, k, cap, everyone)
         b, g2 = select(feat, key, albums, ok, times, k, cap, no_people)
-        runs[key] = {"all": a, "wall": b, "groups": g, "ms": per.get(key)}
+        # 对照：不去重、不限相册，纯按分数的前 k 张。网页里会标出它们有没有进精选
+        top = np.argsort([-f.get(f"aes_{key}", -1e9) for f in feat], kind="stable")[:k].tolist()
+        runs[key] = {"all": a, "wall": b, "top": top, "groups": g, "ms": per.get(key)}
         print(f"  {key}: 去重后 {g} 组，挑 {len(a)} 张；不含人像 {len(b)} 张")
 
     # 人像识别抽查：每类按 CLIP 概率排开取一些，边界上的也看得到
@@ -326,7 +328,7 @@ def main():
         idx = sorted(idx, key=lambda i: -feat[i]["person_p"] if kd == "无人" else feat[i]["person_p"])
         sample[kd] = idx
 
-    big = sorted({i for r in runs.values() for i in r["all"] + r["wall"]})
+    big = sorted({i for r in runs.values() for i in r["all"] + r["wall"] + r["top"]})
     small = sorted({i for v in sample.values() for i in v} - set(big))
     from PIL import Image, ImageOps
 
@@ -338,11 +340,13 @@ def main():
         photos[i] = {
             "name": str(paths[i].relative_to(root)), "album": albums[i], "src": thumb_uri(im, size),
             "aes": {k2: round(feat[i][f"aes_{k2}"], 3) for k2 in runs if f"aes_{k2}" in feat[i]},
-            "kind": kinds[i], "why": cls[i][1],
+            "kind": kinds[i], "why": cls[i][1], "time": feat[i]["time"],
         }
     data = {"root": root.name, "n": n, "albums": nalb, "ok": sum(ok), "k": k, "cap": cap, "kinds": counts,
             "names": {k2: NAMES[k2] for k2 in runs}, "runs": runs, "sample": sample, "photos": photos}
-    tpl = (Path(__file__).parent / "library.html").read_text(encoding="utf-8")
+    # 大图（点开看）用 albums.py 生成的 big/ 目录，两个网页放同一个目录就共用
+    here = Path(__file__).parent
+    tpl = (here / "library.html").read_text(encoding="utf-8").replace("/*BIGVIEW*/", (here / "bigview.js").read_text(encoding="utf-8"))
     out = Path(args.out).expanduser()
     out.write_text(tpl.replace("/*DATA*/null", json.dumps(data, ensure_ascii=False)), encoding="utf-8")
     print(f"写好了 {out}（{out.stat().st_size / 1e6:.1f} MB），共用 {(time.time() - t_all) / 60:.1f} 分钟")

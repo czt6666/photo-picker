@@ -1,3 +1,4 @@
+<meta charset="utf-8">
 <title>相册打分</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500&family=Noto+Sans+SC:wght@400;600;800&display=swap">
@@ -49,11 +50,15 @@ figcaption { padding: 6px 8px 8px; font-size: .74rem; display: grid; gap: 3px; m
 .acard figcaption { font-size: .82rem; gap: 5px; }
 .acard h2 { font-size: 1rem; margin: 0; font-weight: 600; }
 .why { color: var(--muted); font-size: .68rem; }
+.subdir { color: var(--accent); }
+.grid figure img { cursor: zoom-in; }
 </style>
 
 <main id="app"></main>
 
+<script src="big/index.js"></script>
 <script>
+/*BIGVIEW*/
 const DATA = /*DATA*/null;
 const KEYS = Object.keys(DATA.names);
 const app = document.getElementById("app");
@@ -70,7 +75,7 @@ function index() {
   app.replaceChildren();
   document.title = "相册打分";
   app.append(el("header", {}, el("h1", { textContent: "相册打分 · " + DATA.root }),
-    el("p", { className: "lead", textContent: DATA.total + " 张照片，按目录分 " + DATA.albums.length + " 组。条形是这个目录在各模型下的平均全库百分位：50 表示和全库平均一样，越长越好。点开一个目录看每张照片的分数。" })));
+    el("p", { className: "lead", textContent: DATA.total + " 张照片，按一级目录分 " + DATA.albums.length + " 组（子目录里的照片算在上一级里）。条形是这个目录在各模型下的平均全库百分位：50 表示和全库平均一样，越长越好。点开一个目录看每张照片的分数。" })));
   const g = el("div", { className: "agrid" });
   DATA.albums.forEach((a, n) => {
     const top = a.photos.slice().sort((x, y) => sumP(y) - sumP(x)).slice(0, 4);
@@ -97,7 +102,7 @@ function album(n) {
   document.title = "相册打分 · " + A.dir;
   app.append(el("header", {}, el("button", { type: "button", className: "back", id: "back", textContent: "← 全部目录", onclick: index }),
     el("h1", { textContent: A.dir }),
-    el("p", { className: "lead", textContent: A.count + " 张。每张下面是各模型的原始分和全库百分位条（条越长，在全库里排得越靠前）。人像 " + A.kinds["人像"] + " · 有人 " + A.kinds["有人"] + " · 无人 " + A.kinds["无人"] + "。" })));
+    el("p", { className: "lead", textContent: A.count + " 张。每张下面是各模型的原始分和全库百分位条（条越长，在全库里排得越靠前）。人像 " + A.kinds["人像"] + " · 有人 " + A.kinds["有人"] + " · 无人 " + A.kinds["无人"] + "。子目录里的照片名字前标了子目录。点照片看大图。" })));
   const sb = el("div", { className: "bar" }, el("span", { textContent: "排序" }));
   const kb = el("div", { className: "bar" }, el("span", { textContent: "人像" }));
   const g = el("div", { className: "grid" });
@@ -105,15 +110,20 @@ function album(n) {
   [...KEYS.map((k) => [k, DATA.names[k]]), ["time", "拍摄时间"]].forEach(([k, label]) =>
     sb.append(el("button", { type: "button", id: "sort-" + k, textContent: label, onclick: () => { sortBy = k; try { localStorage.setItem("albums-sort", k); } catch (e) {} draw(); } })));
   ["全部", "人像", "有人", "无人"].forEach((k) => kb.append(el("button", { type: "button", id: "kind-" + k, textContent: k, onclick: () => { kind = k; draw(); } })));
+  let L = [];
+  const cap = (p) => el("div", {}, (p.sub ? p.sub + "/" : "") + p.name + "　" + p.kind + "　",
+    ...KEYS.map((k) => el("span", { className: "dim", textContent: DATA.names[k] + " " + (p.s[k] ?? "–") + "（前 " + Math.max(1, Math.round(100 - (p.p[k] ?? 0))) + "%）　" })));
   function draw() {
     sb.querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", b.id === "sort-" + sortBy));
     kb.querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", b.id === "kind-" + kind));
-    const L = A.photos.filter((p) => kind === "全部" || p.kind === kind)
+    L = A.photos.filter((p) => kind === "全部" || p.kind === kind)
       .sort((a, b) => sortBy === "time" ? a.time - b.time : (b.p[sortBy] ?? 0) - (a.p[sortBy] ?? 0));
-    g.replaceChildren(...L.map((p) => el("figure", {},
-      el("img", { src: p.src, alt: p.name, loading: "lazy" }),
+    g.replaceChildren(...L.map((p, i) => el("figure", {},
+      el("img", { src: p.src, alt: p.name, loading: "lazy", onclick: () => BigView.open(L, i, { cap }) }),
       el("figcaption", {},
-        el("div", { className: "row" }, el("span", { className: "name", textContent: p.name, title: p.name }), el("span", { className: "kind " + KC[p.kind], textContent: p.kind })),
+        el("div", { className: "row" }, el("span", { className: "name", title: p.rel },
+          ...(p.sub ? [el("span", { className: "subdir", textContent: p.sub + "/" })] : []), p.name),
+          el("span", { className: "kind " + KC[p.kind], textContent: p.kind })),
         ...KEYS.map((k) => metric(k, p.s[k], p.p[k], k === sortBy)),
         el("div", { className: "why", textContent: p.why })))));
   }
