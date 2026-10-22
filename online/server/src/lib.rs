@@ -102,7 +102,21 @@ pub fn app(cfg: Config) -> Result<Router, String> {
         .route_service("/", index.clone())
         .route_service("/r/{code}", index)
         .fallback_service(ServeDir::new(&cfg.web_dir))
+        .layer(axum::middleware::map_response(utf8_charset))
         .with_state(state))
+}
+
+/// 网页、脚本、样式默认只写 `text/html`、`text/javascript`，没说编码，有的浏览器会猜错，中文变成乱码。
+/// 这里统一补上 `charset=utf-8`。
+async fn utf8_charset(mut res: Response) -> Response {
+    let ct = res.headers().get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or("");
+    let textual = ct.starts_with("text/") || ct.starts_with("application/javascript");
+    if textual && !ct.contains("charset") {
+        if let Ok(v) = HeaderValue::from_str(&format!("{ct}; charset=utf-8")) {
+            res.headers_mut().insert(header::CONTENT_TYPE, v);
+        }
+    }
+    res
 }
 
 // ---------- 错误 ----------

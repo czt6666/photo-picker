@@ -199,3 +199,13 @@ async fn create_password_and_guess_limit() {
     let (s, _) = call(&srv, "GET", &format!("/api/albums/{code}"), &[], None).await;
     assert_eq!(s, 429);
 }
+
+#[tokio::test]
+async fn pages_declare_utf8() {
+    let srv = start(None).await;
+    let (s, _, head) = http(&srv, "GET", "/", &[], vec![], "").await;
+    assert_eq!(s, 200);
+    assert!(head.to_ascii_lowercase().contains("content-type: text/html; charset=utf-8"), "{head}");
+    let (_, _, head) = http(&srv, "GET", "/api/albums/ABCDEFGHJKLMNPQR", &[], vec![], "").await;
+    assert!(head.to_ascii_lowercase().contains("content-type: application/json"), "{head}");
+}
