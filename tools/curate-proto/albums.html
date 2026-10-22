@@ -44,7 +44,8 @@ figcaption { padding: 6px 8px 8px; font-size: .74rem; display: grid; gap: 3px; m
 .m.on .track i { background: var(--accent); }
 .mosaic { display: grid; grid-template-columns: 1fr 1fr; gap: 2px; }
 .mosaic img { aspect-ratio: 4 / 3; object-fit: cover; width: 100%; display: block; }
-.acard { text-decoration: none; color: inherit; }
+.acard { text-decoration: none; color: inherit; cursor: pointer; display: block; }
+.back { font: inherit; background: none; border: 0; padding: 0; color: var(--accent); cursor: pointer; }
 .acard figcaption { font-size: .82rem; gap: 5px; }
 .acard h2 { font-size: 1rem; margin: 0; font-weight: 600; }
 .why { color: var(--muted); font-size: .68rem; }
@@ -58,48 +59,57 @@ const KEYS = Object.keys(DATA.names);
 const app = document.getElementById("app");
 const el = (tag, props, ...kids) => { const e = Object.assign(document.createElement(tag), props || {}); e.append(...kids); return e; };
 const KC = { "人像": "k0", "有人": "k1", "无人": "k2" };
+const sumP = (p) => KEYS.reduce((a, k) => a + (p.p[k] || 0), 0);
 
 function metric(k, score, p, on) {
-  const tr = el("span", { className: "track" }, el("i", { style: "width:" + p + "%" }));
   return el("div", { className: "m" + (on ? " on" : "") }, el("b", { textContent: DATA.names[k] }),
-    el("span", { className: "v", textContent: score ?? "–" }), tr);
+    el("span", { className: "v", textContent: score ?? "–" }), el("span", { className: "track" }, el("i", { style: "width:" + p + "%" })));
 }
 
 function index() {
-  document.title = "相册打分 · " + DATA.root;
+  app.replaceChildren();
+  document.title = "相册打分";
   app.append(el("header", {}, el("h1", { textContent: "相册打分 · " + DATA.root }),
-    el("p", { className: "lead", textContent: DATA.total + " 张照片，按目录分 " + DATA.albums.length + " 组。条形是这个目录在各模型下的平均全库百分位：50 表示和全库平均水平一样，越长越好。点进去看每张照片的分数。" })));
+    el("p", { className: "lead", textContent: DATA.total + " 张照片，按目录分 " + DATA.albums.length + " 组。条形是这个目录在各模型下的平均全库百分位：50 表示和全库平均一样，越长越好。点开一个目录看每张照片的分数。" })));
   const g = el("div", { className: "agrid" });
-  DATA.albums.forEach((a) => {
-    const mos = el("div", { className: "mosaic" }, ...a.top.map((s) => el("img", { src: s, alt: "", loading: "lazy" })));
+  DATA.albums.forEach((a, n) => {
+    const top = a.photos.slice().sort((x, y) => sumP(y) - sumP(x)).slice(0, 4);
+    const mos = el("div", { className: "mosaic" }, ...top.map((p) => el("img", { src: p.src, alt: "", loading: "lazy" })));
     const cap = el("figcaption", {},
       el("div", { className: "row" }, el("h2", { textContent: a.dir }), el("span", { className: "name", textContent: a.count + " 张" })),
       el("div", { className: "why", textContent: "人像 " + a.kinds["人像"] + " · 有人 " + a.kinds["有人"] + " · 无人 " + a.kinds["无人"] }),
       ...KEYS.map((k) => metric(k, a.mean[k], a.mean[k], false)));
-    g.append(el("a", { className: "acard", href: a.file }, el("figure", {}, mos, cap)));
+    const card = el("div", { className: "acard", role: "button", tabIndex: 0, onclick: () => album(n) }, el("figure", {}, mos, cap));
+    card.onkeydown = (e) => { if (e.key === "Enter") album(n); };
+    g.append(card);
   });
   app.append(g);
+  window.scrollTo(0, 0);
 }
 
-function album() {
-  document.title = "相册打分 · " + DATA.dir;
-  let sortBy = KEYS.includes("v25") ? "v25" : KEYS[0], kind = "全部";
-  try { const s = localStorage.getItem("albums-sort"); if (s && (KEYS.includes(s) || s === "time")) sortBy = s; } catch (e) {}
-  app.append(el("header", {}, el("a", { href: "index.html", textContent: "← 全部目录" }),
-    el("h1", { textContent: DATA.dir }),
-    el("p", { className: "lead", textContent: DATA.count + " 张。每张下面是各模型的原始分和全库百分位条（条越长，在全库里排得越靠前）。人像 " + DATA.kinds["人像"] + " · 有人 " + DATA.kinds["有人"] + " · 无人 " + DATA.kinds["无人"] + "。" })));
+let sortBy = KEYS.includes("v25") ? "v25" : KEYS[0];
+try { const s = localStorage.getItem("albums-sort"); if (s && (KEYS.includes(s) || s === "time")) sortBy = s; } catch (e) {}
+
+function album(n) {
+  const A = DATA.albums[n];
+  let kind = "全部";
+  app.replaceChildren();
+  document.title = "相册打分 · " + A.dir;
+  app.append(el("header", {}, el("button", { type: "button", className: "back", id: "back", textContent: "← 全部目录", onclick: index }),
+    el("h1", { textContent: A.dir }),
+    el("p", { className: "lead", textContent: A.count + " 张。每张下面是各模型的原始分和全库百分位条（条越长，在全库里排得越靠前）。人像 " + A.kinds["人像"] + " · 有人 " + A.kinds["有人"] + " · 无人 " + A.kinds["无人"] + "。" })));
   const sb = el("div", { className: "bar" }, el("span", { textContent: "排序" }));
   const kb = el("div", { className: "bar" }, el("span", { textContent: "人像" }));
   const g = el("div", { className: "grid" });
   app.append(sb, kb, g);
-  const opts = [...KEYS.map((k) => [k, DATA.names[k]]), ["time", "拍摄时间"]];
-  opts.forEach(([k, label]) => sb.append(el("button", { type: "button", id: "sort-" + k, textContent: label, onclick: () => { sortBy = k; try { localStorage.setItem("albums-sort", k); } catch (e) {} draw(); } })));
+  [...KEYS.map((k) => [k, DATA.names[k]]), ["time", "拍摄时间"]].forEach(([k, label]) =>
+    sb.append(el("button", { type: "button", id: "sort-" + k, textContent: label, onclick: () => { sortBy = k; try { localStorage.setItem("albums-sort", k); } catch (e) {} draw(); } })));
   ["全部", "人像", "有人", "无人"].forEach((k) => kb.append(el("button", { type: "button", id: "kind-" + k, textContent: k, onclick: () => { kind = k; draw(); } })));
   function draw() {
     sb.querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", b.id === "sort-" + sortBy));
     kb.querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", b.id === "kind-" + kind));
-    let L = DATA.photos.filter((p) => kind === "全部" || p.kind === kind);
-    L = L.slice().sort((a, b) => sortBy === "time" ? a.time - b.time : (b.p[sortBy] ?? 0) - (a.p[sortBy] ?? 0));
+    const L = A.photos.filter((p) => kind === "全部" || p.kind === kind)
+      .sort((a, b) => sortBy === "time" ? a.time - b.time : (b.p[sortBy] ?? 0) - (a.p[sortBy] ?? 0));
     g.replaceChildren(...L.map((p) => el("figure", {},
       el("img", { src: p.src, alt: p.name, loading: "lazy" }),
       el("figcaption", {},
@@ -108,7 +118,8 @@ function album() {
         el("div", { className: "why", textContent: p.why })))));
   }
   draw();
+  window.scrollTo(0, 0);
 }
 
-DATA.mode === "index" ? index() : album();
+index();
 </script>

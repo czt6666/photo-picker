@@ -4,9 +4,9 @@
 分数同时给"全库百分位"：某张在 V2.5 下排前 5%，就是比全库 95% 的照片分高。不同模型的刻度不一样，
 百分位能横着比。
 
-输出一个文件夹：index.html（目录总览）+ 每个目录一个 dNN.html。双击 index.html 打开。
+输出一个网页（缩略图内嵌），双击打开；页内点目录进去看。
 
-用法：python albums.py ~/workspace/myphotos --out 相册打分
+用法：python albums.py ~/workspace/myphotos --out 相册打分.html
 """
 
 import argparse
@@ -28,13 +28,13 @@ from library import NAMES, scan  # noqa: E402
 def thumb(path):
     im = Image.open(path)
     im.draft("RGB", (600, 600))
-    return thumb_uri(ImageOps.exif_transpose(im).convert("RGB"), 260)
+    return thumb_uri(ImageOps.exif_transpose(im).convert("RGB"), 200)
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("root")
-    ap.add_argument("--out", default="相册打分")
+    ap.add_argument("--out", default="相册打分.html")
     args = ap.parse_args()
     root = Path(args.root).expanduser()
     cache = pickle.loads((CACHE / "library.pkl").read_bytes())
@@ -56,21 +56,13 @@ def main():
         dirs.setdefault(str(p.parent.relative_to(root)) or "（根目录）", []).append(i)
     names = sorted(dirs)
 
-    out = Path(args.out).expanduser()
-    out.mkdir(parents=True, exist_ok=True)
-    tpl = (Path(__file__).parent / "albums.html").read_text(encoding="utf-8")
-
-    def page(data):
-        return tpl.replace("/*DATA*/null", json.dumps(data, ensure_ascii=False))
-
-    index = []
-    for n, d in enumerate(names):
+    albums = []
+    for d in names:
         idx = dirs[d]
         print(f"  {d}：{len(idx)} 张", flush=True)
         with ThreadPoolExecutor(8) as ex:
             srcs = list(ex.map(thumb, [paths[i] for i in idx]))
-        photos = []
-        kinds = {"人像": 0, "有人": 0, "无人": 0}
+        photos, kinds = [], {"人像": 0, "有人": 0, "无人": 0}
         for i, src in zip(idx, srcs):
             f = feat[i]
             kind, why = people.classify(f.get("vision"), f["person_p"], f.get("yolo"))
@@ -80,17 +72,13 @@ def main():
                 "s": {k: round(f[f"aes_{k}"], 3) for k in keys if f"aes_{k}" in f},
                 "p": {k: round(float(pct[k][i]), 1) for k in keys},
             })
-        file = f"d{n + 1:02d}.html"
-        (out / file).write_text(page({"mode": "album", "dir": d, "names": {k: NAMES[k] for k in keys},
-                                      "photos": photos, "count": len(idx), "kinds": kinds}), encoding="utf-8")
-        best = sorted(photos, key=lambda x: -sum(x["p"].values()))[:4]
-        index.append({"dir": d, "file": file, "count": len(idx), "kinds": kinds,
-                      "mean": {k: round(float(np.mean([pct[k][i] for i in idx])), 1) for k in keys},
-                      "top": [b["src"] for b in best]})
-    (out / "index.html").write_text(page({"mode": "index", "root": root.name, "names": {k: NAMES[k] for k in keys},
-                                          "albums": index, "total": len(paths)}), encoding="utf-8")
-    size = sum(f.stat().st_size for f in out.iterdir()) / 1e6
-    print(f"写好了 {out}/index.html 等 {len(names) + 1} 个文件，共 {size:.1f} MB")
+        albums.append({"dir": d, "count": len(idx), "kinds": kinds, "photos": photos,
+                       "mean": {k: round(float(np.mean([pct[k][i] for i in idx])), 1) for k in keys}})
+    data = {"root": root.name, "names": {k: NAMES[k] for k in keys}, "albums": albums, "total": len(paths)}
+    tpl = (Path(__file__).parent / "albums.html").read_text(encoding="utf-8")
+    out = Path(args.out).expanduser()
+    out.write_text(tpl.replace("/*DATA*/null", json.dumps(data, ensure_ascii=False)), encoding="utf-8")
+    print(f"写好了 {out}（{out.stat().st_size / 1e6:.1f} MB）")
 
 
 if __name__ == "__main__":
