@@ -51,7 +51,7 @@ figcaption { padding: 5px 8px 7px; font-size: .75rem; display: grid; gap: 1px; m
   <div class="stats" id="stats"></div>
   <div class="tabs" id="tabs" role="group" aria-label="美学模型"></div>
   <section><h2>机器选中的 <small id="c-chosen"></small></h2><div class="grid" id="g-chosen"></div></section>
-  <section><h2>你加了星标、机器没选的 <small id="c-missed"></small></h2><div class="grid" id="g-missed"></div></section>
+  <section><h2>你挑了、机器没选的 <small id="c-missed"></small></h2><div class="grid" id="g-missed"></div></section>
   <section><h2>连拍或相似，被合并掉的 <small>只列前 60 张，标出留下的是哪张</small></h2><div class="grid" id="g-dups"></div></section>
   <section><h2>清晰度或曝光不过关，直接淘汰的 <small id="c-rej"></small></h2><div class="grid" id="g-rej"></div></section>
 </main>
@@ -67,7 +67,7 @@ function card(i, extra) {
   const p = DATA.photos[i];
   const f = document.createElement("figure");
   const tags = [];
-  if (p.star) tags.push('<span class="tag star">★ 你加过星标</span>');
+  if (p.star) tags.push('<span class="tag star">★ 你挑的</span>');
   if (p.why.length) tags.push('<span class="tag bad">' + p.why.join("、") + '</span>');
   if (extra) tags.push(extra);
   const img = document.createElement("img");
@@ -92,7 +92,7 @@ function render() {
   const missed = DATA.starred.filter((i) => !chosen.has(i));
   $("stats").innerHTML = [
     [DATA.n, "张照片"], [r.groups, "去掉连拍后剩几组"], [r.chosen.length, "机器选中"],
-    [DATA.stars, "你加过星标"], [r.hit, "两边重合"], [r.ms + " ms", "每张打分耗时"],
+    [DATA.stars, "你挑的"], [r.hit, "两边重合"], [DATA.baseline, "瞎蒙能重合几张"], [r.ms + " ms", "每张打分耗时"],
   ].map(([v, l]) => '<div class="stat"><b>' + v + '</b><span>' + l + '</span></div>').join("");
   $("c-chosen").textContent = "按挑选顺序，第一张是最好看的";
   $("c-missed").textContent = missed.length + " 张";
@@ -103,7 +103,9 @@ function render() {
   fill("g-rej", DATA.rejected);
 }
 $("title").textContent = "相册精选试跑：" + DATA.album;
-$("lead").textContent = "从 " + DATA.n + " 张里按约 3% 挑了 " + DATA.k + " 张。星标是你在 PhotoPicker 里加的，用来对照机器选得准不准。美学分大致 1～10，5 分算普通，6 分以上算好看。";
+$("lead").textContent = DATA.stars
+  ? "你从 " + DATA.n + " 张里挑了 " + DATA.stars + " 张（" + (DATA.pickdirs.length ? DATA.pickdirs.join("、") + " 文件夹和星标" : "星标") + "），机器也挑 " + DATA.stars + " 张，看重合多少。随便乱挑平均能撞上 " + DATA.baseline + " 张，重合越多于这个数，说明机器越懂。美学分大致 1～10，5 分普通，6 分以上算好看。"
+  : "从 " + DATA.n + " 张里按约 3% 挑了 " + DATA.k + " 张。美学分大致 1～10，5 分普通，6 分以上算好看。";
 Object.keys(DATA.runs).forEach((k) => {
   const b = document.createElement("button");
   b.type = "button"; b.dataset.k = k; b.id = "tab-" + k; b.textContent = NAMES[k] || k;

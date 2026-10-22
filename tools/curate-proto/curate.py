@@ -45,13 +45,13 @@ CACHE = Path(os.environ.get("CURATE_CACHE", Path.home() / ".cache" / "photopicke
 #   l14：improved-aesthetic-predictor，ViT-L/14 上的小 MLP（SAC + LOGOS + AVA 数据）
 MODELS = {
     "b32": {
-        "clip": ("ViT-B-32", "openai"),
+        "clip": ("ViT-B-32-quickgelu", "openai"),
         "head_url": "https://github.com/LAION-AI/aesthetic-predictor/raw/main/sa_0_4_vit_b_32_linear.pth",
         "dim": 512,
         "mlp": False,
     },
     "l14": {
-        "clip": ("ViT-L-14", "openai"),
+        "clip": ("ViT-L-14-quickgelu", "openai"),
         "head_url": "https://github.com/christophschuhmann/improved-aesthetic-predictor/raw/main/sac%2Blogos%2Bava1-l14-linearMSE.pth",
         "dim": 768,
         "mlp": True,
@@ -260,9 +260,20 @@ def main():
     args = ap.parse_args()
 
     folder = Path(args.folder).expanduser()
-    files = sorted(p for p in folder.iterdir() if p.suffix.lower() in EXTS and not p.name.startswith("."))
-    print(f"相册 {folder.name}：{len(files)} 张可读照片")
-    stars = load_stars(folder)
+
+    def photos_in(d):
+        return sorted(p for p in d.iterdir() if p.is_file() and p.suffix.lower() in EXTS and not p.name.startswith("."))
+
+    # 你挑过的：相册里加了星标的，加上「精选」开头的子文件夹里的（挑完挪进去的也算）。
+    # 子文件夹里的照片也放回候选池一起比，这样才能看机器能不能把它们挑出来。
+    files = photos_in(folder)
+    stars = {(folder, n) for n in load_stars(folder)}
+    pick_dirs = [d for d in sorted(folder.iterdir()) if d.is_dir() and d.name.startswith("精选")]
+    for d in pick_dirs:
+        sub = photos_in(d)
+        files += sub
+        stars |= {(d, norm_name(p.name)) for p in sub}
+    print(f"相册 {folder.name}：{len(files)} 张可读照片（含 {', '.join(d.name for d in pick_dirs) or '无'} 子文件夹）")
 
     t0 = time.time()
     with ThreadPoolExecutor(8) as ex:
@@ -293,8 +304,10 @@ def main():
         reasons.append(r)
     quality_ok = [not r for r in reasons]
 
-    k = min(n, max(5, min(200, round(n * 0.03))))
-    starred_idx = {i for i, it in enumerate(items) if norm_name(it["path"].name) in stars}
+    starred_idx = {i for i, it in enumerate(items) if (it["path"].parent, norm_name(it["path"].name)) in stars}
+    # 有你挑的结果时，机器就挑一样多，方便直接比重合了几张；没有就按 3%
+    k = len(starred_idx) if starred_idx else min(n, max(5, min(200, round(n * 0.03))))
+    k = min(n, k)
 
     runs = {}
     for key in [m.strip() for m in args.models.split(",") if m.strip()]:
@@ -317,7 +330,7 @@ def main():
     for i in sorted(used):
         it = items[i]
         photos[i] = {
-            "name": it["path"].name,
+            "name": it["path"].name if it["path"].parent == folder else f'{it["path"].parent.name}/{it["path"].name}',
             "src": thumb_uri(it["img"]),
             "star": i in starred_idx,
             "why": reasons[i],
@@ -326,6 +339,7 @@ def main():
         }
     data = {
         "album": folder.name, "n": n, "k": k, "stars": len(starred_idx), "decode": round(t_decode, 1),
+        "baseline": round(k * len(starred_idx) / max(1, n), 1), "pickdirs": [d.name for d in pick_dirs],
         "runs": {k2: {"chosen": r["chosen"], "groups": r["groups"], "ms": round(r["ms"]), "hit": r["hit"],
                       "dups": [i for i in r["dup_of"] if i in photos][:60]} for k2, r in runs.items()},
         "rejected": [i for i in range(n) if reasons[i]][:80],
