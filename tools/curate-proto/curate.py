@@ -269,6 +269,9 @@ def main():
     files = photos_in(folder)
     stars = {(folder, n) for n in load_stars(folder)}
     pick_dirs = [d for d in sorted(folder.iterdir()) if d.is_dir() and "精选" in d.name]
+    picked_names = {norm_name(p.name) for d in pick_dirs for p in photos_in(d)}
+    # 挑的时候是复制而不是挪走的话，父目录里还有一份同名的，去掉，免得一张照片同时算"挑了"和"没挑"
+    files = [p for p in files if norm_name(p.name) not in picked_names]
     for d in pick_dirs:
         sub = photos_in(d)
         files += sub
@@ -309,16 +312,25 @@ def main():
     k = len(starred_idx) if starred_idx else min(n, max(5, min(200, round(n * 0.03))))
     k = min(n, k)
 
-    runs = {}
+    runs, embs = {}, {}
     for key in [m.strip() for m in args.models.split(",") if m.strip()]:
         emb, aes, dt = embed_and_score(items, key)
         chosen, dup_of, ngroups = pick(items, emb, aes, quality_ok, k)
+        embs[key] = emb.astype(np.float16)
         hit = len(set(chosen) & starred_idx)
         runs[key] = {
             "chosen": chosen, "dup_of": dup_of, "aes": aes.tolist(), "groups": ngroups,
             "ms": 1000 * dt / max(1, n), "hit": hit,
         }
         print(f"  {key}: 挑 {len(chosen)} 张，连拍/相似分组后剩 {ngroups} 组，其中你加过星的 {hit} 张")
+
+    # 存下指纹和分数，给 taste.py（学你的口味）用
+    np.savez_compressed(
+        Path(args.out).expanduser().with_suffix(".npz"),
+        album=folder.name, time=np.array([it["time"] for it in items]),
+        picked=np.array([i in starred_idx for i in range(n)]), ok=np.array(quality_ok),
+        **{f"emb_{k2}": embs[k2] for k2 in runs}, **{f"aes_{k2}": np.array(r["aes"]) for k2, r in runs.items()},
+    )
 
     # 页面里每张图的数据
     used = set(starred_idx)
