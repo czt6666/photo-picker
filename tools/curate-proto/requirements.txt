@@ -5,3 +5,5 @@ pillow-heif
 numpy
 pyobjc-framework-Vision; sys_platform == 'darwin'
 aesthetic-predictor-v2-5
+pyiqa
+transformers>=5.2  # Q-ReAlign 需要；若和 V2.5 冲突，可另开一个 venv 只跑 --models l14,qrealign，分数缓存共用

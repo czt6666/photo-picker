@@ -34,6 +34,15 @@ figcaption { padding: 6px 9px 8px; font-size: .76rem; display: grid; gap: 1px; m
 .score { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 .album { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--muted); }
 .agree { color: var(--accent); white-space: nowrap; }
+.kind { white-space: nowrap; color: var(--muted); }
+.kind.p { color: var(--accent); }
+h2 { font-size: 1.1rem; font-weight: 600; margin: 0; display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+h2 small { font-weight: 400; color: var(--muted); font-size: .85rem; }
+section { display: grid; gap: 12px; }
+.sub { display: flex; gap: 6px; flex-wrap: wrap; }
+.sub button { font: inherit; font-size: .85rem; padding: 4px 12px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel); color: var(--fg); cursor: pointer; }
+.sub button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+.small { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
 [hidden] { display: none !important; }
 #show { position: fixed; inset: 0; background: var(--shade); z-index: 20; display: grid; grid-template-rows: 1fr auto;
   padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px); }
@@ -52,7 +61,17 @@ figcaption { padding: 6px 9px 8px; font-size: .76rem; display: grid; gap: 1px; m
   </header>
   <div class="stats" id="stats"></div>
   <div class="bar" id="bar" role="group" aria-label="美学模型"></div>
+  <div class="sub" id="mode" role="group" aria-label="范围">
+    <button type="button" id="mode-all" data-m="all">全部照片</button>
+    <button type="button" id="mode-wall" data-m="wall">壁纸：不含人像</button>
+  </div>
   <div class="grid" id="grid"></div>
+  <section>
+    <h2>人像识别抽查 <small id="kinds"></small></h2>
+    <p class="lead">「人像」是人为主体的照片，做壁纸时排除；「有路人」是风景里有人但很小，壁纸可用。每类随机抽一些，按 CLIP 判断「在拍人」的概率从低到高排，越靠前越接近分界。</p>
+    <div class="sub" id="kindbar" role="group" aria-label="人像类别"></div>
+    <div class="grid small" id="kgrid"></div>
+  </section>
 </main>
 <div id="show" hidden>
   <img id="show-img" alt="">
@@ -63,52 +82,68 @@ figcaption { padding: 6px 9px 8px; font-size: .76rem; display: grid; gap: 1px; m
 <script>
 const DATA = /*DATA*/null;
 const $ = (id) => document.getElementById(id);
-let cur = DATA.runs.v25 ? "v25" : Object.keys(DATA.runs)[0];
-try { const s = localStorage.getItem("library-model"); if (s && DATA.runs[s]) cur = s; } catch (e) {}
+const KEYS = Object.keys(DATA.runs);
+let cur = DATA.runs.v25 ? "v25" : KEYS[0], mode = "all", kind = "人像";
+try { const s = localStorage.getItem("library-model2"); if (s && DATA.runs[s]) cur = s; } catch (e) {}
+const list = () => DATA.runs[cur][mode];
+
+function card(i, onclick, big) {
+  const p = DATA.photos[i];
+  const f = document.createElement("figure");
+  const img = document.createElement("img");
+  img.src = p.src; img.alt = p.name; img.loading = "lazy";
+  f.appendChild(img);
+  const c = document.createElement("figcaption");
+  const row = document.createElement("div"); row.className = "row";
+  const sc = document.createElement("span"); sc.className = "score";
+  sc.textContent = big ? DATA.names[cur] + " " + (p.aes[cur] ?? "–") : p.why;
+  row.appendChild(sc);
+  if (big) {
+    const agree = KEYS.filter((k) => DATA.runs[k][mode].includes(i));
+    const a = document.createElement("span"); a.className = "agree";
+    if (agree.length > 1) a.textContent = agree.length === KEYS.length ? "全部模型都选" : agree.length + " 个模型都选";
+    row.appendChild(a);
+  }
+  c.appendChild(row);
+  const meta = document.createElement("div"); meta.className = "row";
+  const al = document.createElement("span"); al.className = "album"; al.textContent = p.name; al.title = p.name;
+  const kd = document.createElement("span"); kd.className = "kind" + (p.kind === "人像" ? " p" : ""); kd.textContent = p.kind;
+  meta.append(al, kd);
+  c.appendChild(meta);
+  f.appendChild(c);
+  if (onclick) f.onclick = onclick;
+  return f;
+}
 
 function render() {
   const r = DATA.runs[cur];
   document.querySelectorAll("#bar button[data-k]").forEach((b) => b.setAttribute("aria-pressed", b.dataset.k === cur));
-  const allThree = r.chosen.filter((i) => DATA.photos[i].in.length === Object.keys(DATA.runs).length).length;
+  document.querySelectorAll("#mode button").forEach((b) => b.setAttribute("aria-pressed", b.dataset.m === mode));
+  const L = list();
+  const shared = L.filter((i) => KEYS.every((k) => DATA.runs[k][mode].includes(i))).length;
   $("stats").innerHTML = [
-    [DATA.n, "张照片"], [DATA.albums, "个相册"], [r.groups, "去重后剩几组"], [r.chosen.length, "选中"],
-    [allThree, "三个模型都选了"], [r.ms != null ? r.ms + " ms" : "–", "每张打分耗时"],
+    [DATA.n, "张照片"], [DATA.albums, "个相册"], [r.groups, "去重后剩几组"], [L.length, "选中"],
+    [shared, "全部模型都选了"], [r.ms != null ? r.ms + " ms" : "–", "每张打分耗时"],
   ].map(([v, l]) => '<div class="stat"><b>' + v + '</b><span>' + l + '</span></div>').join("");
   const g = $("grid"); g.replaceChildren();
-  r.chosen.forEach((i, pos) => {
-    const p = DATA.photos[i];
-    const f = document.createElement("figure");
-    const img = document.createElement("img");
-    img.src = p.src; img.alt = p.name; img.loading = "lazy";
-    f.appendChild(img);
-    const c = document.createElement("figcaption");
-    const row = document.createElement("div"); row.className = "row";
-    const sc = document.createElement("span"); sc.className = "score"; sc.textContent = "美学 " + p.aes[cur];
-    row.appendChild(sc);
-    if (p.in.length > 1) {
-      const a = document.createElement("span"); a.className = "agree";
-      a.textContent = p.in.length === Object.keys(DATA.runs).length ? "三个都选" : p.in.map((k) => DATA.names[k].replace(/^.*?(B\/32|L\/14|V2\.5).*$/, "$1")).join("+") + " 都选";
-      row.appendChild(a);
-    }
-    c.appendChild(row);
-    const al = document.createElement("span"); al.className = "album"; al.textContent = p.name; al.title = p.name;
-    c.appendChild(al);
-    f.appendChild(c);
-    f.onclick = () => play(pos);
-    g.appendChild(f);
-  });
+  L.forEach((i, pos) => g.appendChild(card(i, () => play(pos), true)));
+}
+function renderKinds() {
+  document.querySelectorAll("#kindbar button").forEach((b) => b.setAttribute("aria-pressed", b.dataset.k === kind));
+  const g = $("kgrid"); g.replaceChildren();
+  DATA.sample[kind].forEach((i) => g.appendChild(card(i, null, false)));
 }
 
 let timer = null, at = 0;
 function showAt(pos) {
-  const list = DATA.runs[cur].chosen;
-  at = (pos + list.length) % list.length;
-  const p = DATA.photos[list[at]];
+  const L = list();
+  at = (pos + L.length) % L.length;
+  const p = DATA.photos[L[at]];
   $("show-img").src = p.src; $("show-img").alt = p.name;
-  $("show-cap").innerHTML = "";
-  $("show-cap").append(p.album + "　", Object.assign(document.createElement("span"), { textContent: (at + 1) + " / " + list.length + "　←→ 切换，空格暂停" }));
+  $("show-cap").replaceChildren(p.album + "　", Object.assign(document.createElement("span"), { textContent: (at + 1) + " / " + L.length + "　←→ 切换，空格暂停" }));
 }
 function play(pos) {
+  if (!list().length) return;
   $("show").hidden = false; showAt(pos || 0);
   clearInterval(timer); timer = setInterval(() => showAt(at + 1), 4000);
   try { $("show").requestFullscreen && $("show").requestFullscreen().catch(() => {}); } catch (e) {}
@@ -126,18 +161,25 @@ document.addEventListener("keydown", (e) => {
   else if (e.key === "ArrowLeft") showAt(at - 1);
   else if (e.key === " ") { e.preventDefault(); if (timer) { clearInterval(timer); timer = null; } else timer = setInterval(() => showAt(at + 1), 4000); }
 });
-document.addEventListener("fullscreenchange", () => { if (!document.fullscreenElement && !$("show").hidden && timer === null) {} });
 
 $("title").textContent = "全库精选 · " + DATA.root;
-$("lead").textContent = "从 " + DATA.albums + " 个相册的 " + DATA.n + " 张照片里，三个模型各挑 " + DATA.k + " 张。连拍和几乎一样的只留一张，每个相册最多 " + DATA.cap + " 张，让不同的旅行都能轮到。照片原地没动。美学分各模型刻度不同，只在同一个模型里比高低。";
-Object.keys(DATA.runs).forEach((k) => {
+$("lead").textContent = "从 " + DATA.albums + " 个相册的 " + DATA.n + " 张照片里，每个模型各挑 " + DATA.k + " 张。连拍和几乎一样的只留一张，每个相册最多 " + DATA.cap + " 张。「壁纸」那组排除了以人为主体的照片。照片原地没动。各模型的分数刻度不同，只在同一个模型里比高低。";
+$("kinds").textContent = Object.entries(DATA.kinds).map(([k, v]) => k + " " + v + " 张").join(" · ");
+KEYS.forEach((k) => {
   const b = document.createElement("button");
   b.type = "button"; b.dataset.k = k; b.id = "tab-" + k; b.textContent = DATA.names[k] || k;
-  b.onclick = () => { cur = k; try { localStorage.setItem("library-model", k); } catch (e) {} render(); };
+  b.onclick = () => { cur = k; try { localStorage.setItem("library-model2", k); } catch (e) {} render(); };
   $("bar").appendChild(b);
 });
 const pb = document.createElement("button");
 pb.type = "button"; pb.className = "play"; pb.id = "play"; pb.textContent = "▶ 轮播"; pb.onclick = () => play(0);
 $("bar").appendChild(pb);
-render();
+document.querySelectorAll("#mode button").forEach((b) => (b.onclick = () => { mode = b.dataset.m; render(); }));
+["人像", "有路人", "无人"].forEach((k) => {
+  const b = document.createElement("button");
+  b.type = "button"; b.dataset.k = k; b.id = "kind-" + k; b.textContent = k + "（" + (DATA.kinds[k] || 0) + "）";
+  b.onclick = () => { kind = k; renderKinds(); };
+  $("kindbar").appendChild(b);
+});
+render(); renderKinds();
 </script>
