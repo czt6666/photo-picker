@@ -1537,15 +1537,6 @@ body.touch .badge {
   body.touch .toolbar {
     min-height: 52px;
   }
-  body.touch .toolbar .btn.icon,
-  body.touch .btn.tb-menu,
-  body.touch .btn.share {
-    min-width: 42px;
-    height: 40px;
-    font-size: 20px;
-    border: none;
-    background: none;
-  }
   body.touch .view-title {
     font-size: 17px;
     font-weight: 600;
@@ -1580,5 +1571,90 @@ body.touch .badge {
 @keyframes fade-in {
   from {
     opacity: 0;
+  }
+}
+
+/* ---------- SVG 图标 ---------- */
+
+.ico {
+  width: 17px;
+  height: 17px;
+  flex: none;
+  vertical-align: -3px;
+}
+.toolbar .btn,
+.v-back {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+}
+.btn.workdir .label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sb-workdir .ico {
+  width: 15px;
+  height: 15px;
+  margin-right: 2px;
+}
+
+/* 工作目录只在顶栏切换；侧栏那一行只在手机抽屉里出现（手机顶栏没地方放） */
+@media (min-width: 761px) {
+  .sb-workdir {
+    display: none;
+  }
+}
+
+/* 手机顶栏：按钮一样大、只有图标；不要底栏 */
+@media (max-width: 760px) {
+  .toolbar .btn.icon,
+  .toolbar .btn.tb-menu,
+  .toolbar .btn.share {
+    width: 40px;
+    min-width: 40px;
+    height: 40px;
+    padding: 0;
+    margin: 0;
+    border: none;
+    border-radius: 10px;
+    background: none;
+    font-size: 0;
+  }
+  .toolbar .btn .ico {
+    width: 22px;
+    height: 22px;
+  }
+  .toolbar .btn:active {
+    background: rgba(255, 255, 255, 0.08);
+  }
+  .toolbar {
+    gap: 2px;
+    padding-left: 6px;
+    padding-right: 6px;
+  }
+  .statusbar {
+    display: none !important;
+  }
+  .upload-panel {
+    bottom: calc(12px + env(safe-area-inset-bottom));
+  }
+  .v-back .label {
+    display: none;
+  }
+  .v-back {
+    width: 44px;
+    height: 40px;
+    padding: 0;
+  }
+  .v-back .ico {
+    width: 26px;
+    height: 26px;
+  }
+}
+@media (min-width: 761px) {
+  .toolbar .btn.tb-menu {
+    display: none;
   }
 }

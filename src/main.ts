@@ -11,6 +11,7 @@ import { baseName, makeSidebarResizable, Sidebar } from './sidebar';
 import { planRate, planToggle } from './rating';
 import { isStarMode, prefs, store, type View } from './store';
 import type { Library, Photo, Progress } from './types';
+import { ICONS } from './icons';
 import { LANGS, langPref, setLang, t, translateDom, type Lang } from './i18n';
 import { closeMenu, contextMenu, esc, toast, type MenuItem } from './ui';
 import { formatBytes, Viewer } from './viewer';
@@ -80,7 +81,7 @@ const sidebar = new Sidebar($('sidebar'), {
     ]);
   },
   workdirMenu: (x, y) => void showWorkdirMenu(x, y),
-  workdirLabel: (wd) => (isRemotePath(wd) ? `☁ ${remote.get(parseRemotePath(wd).code)?.name ?? ''}` : `📁 ${baseName(wd)}`),
+  workdirLabel: (wd) => (isRemotePath(wd) ? (remote.get(parseRemotePath(wd).code)?.name ?? '') : baseName(wd)),
 });
 
 // ---------------------------------------------------------------------------
@@ -92,11 +93,17 @@ function setLibrary(lib: Library): void {
   sidebar.render();
   const wd = lib.workdir;
   const a = wd && isRemotePath(wd) ? remote.get(parseRemotePath(wd).code) : undefined;
+  const label = (icon: string, text: string, more = true) => {
+    workdirBtn.innerHTML = `${icon}<span class="label"></span>${more ? ICONS.down : ''}`;
+    workdirBtn.querySelector('.label')!.textContent = text;
+  };
   if (a) {
-    workdirBtn.textContent = `☁ ${a.name} ▾`;
+    label(ICONS.cloud, a.name);
     workdirBtn.title = t('远程相册 · 点击切换');
   } else {
-    workdirBtn.textContent = wd ? `📁 ${baseName(wd)} ▾` : isWeb ? t('☁ 打开远程相册') : t('📁 选择工作目录');
+    if (wd) label(ICONS.folder, baseName(wd));
+    else if (isWeb) label(ICONS.cloud, t('打开远程相册'), false);
+    else label(ICONS.folder, t('选择工作目录'), false);
     workdirBtn.title = wd ? `${t('{path}\n点击切换', { path: wd })}（${modKey('O')}）` : `${t('选择照片文件夹')}（${modKey('O')}）`;
   }
   shareBtn.hidden = !a;
@@ -223,8 +230,7 @@ function renderTitle(): void {
     const tag = v.starredOnly ? ` <span class="star">★</span> <span class="dim">${t('仅星标')} ·</span>` : '';
     let sub = esc(v.path);
     if (isRemotePath(v.path)) {
-      const names = remote.presence.get(parseRemotePath(v.path).code) ?? [];
-      sub = names.length ? t('在看：{names}', { names: esc(names.join('、')) }) : '';
+      sub = '';
     }
     titleEl.innerHTML = `<b>${esc(f?.name ?? v.path.split(/[\\/]/).pop() ?? '')}</b>${tag} <span class="dim">${sub}</span>`;
   } else if (v.kind === 'starred') {
@@ -528,6 +534,22 @@ async function rescan(): Promise<void> {
 // ---------------------------------------------------------------------------
 // 工具栏 / 状态栏
 // ---------------------------------------------------------------------------
+
+// 工具栏按钮换成 SVG 图标（文字只留 title / 旁边的 label）
+$('btn-menu').innerHTML = ICONS.menu;
+$('btn-settings').innerHTML = ICONS.settings;
+$('btn-help').innerHTML = ICONS.help;
+$('btn-rescan').innerHTML = ICONS.refresh;
+{
+  const share = $('btn-share');
+  const text = share.querySelector('.label')!.textContent ?? '';
+  share.innerHTML = `${ICONS.share}<span class="label"></span>`;
+  share.querySelector('.label')!.textContent = text;
+  const back = document.querySelector<HTMLElement>('.v-back')!;
+  const bt = back.textContent!.replace('←', '').trim();
+  back.innerHTML = `${ICONS.back}<span class="label"></span>`;
+  back.querySelector('.label')!.textContent = bt;
+}
 
 const workdirBtn = $<HTMLButtonElement>('btn-workdir');
 const shareBtn = $<HTMLButtonElement>('btn-share');

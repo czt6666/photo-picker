@@ -5,6 +5,8 @@ import { buildFolderList, type FolderRow } from './folderList';
 import { isStarMode, prefs, store } from './store';
 import { t } from './i18n';
 import { esc } from './ui';
+import { ICONS } from './icons';
+import { isRemotePath } from './remote';
 
 export interface SidebarCallbacks {
   openFolder(path: string): void;
@@ -12,7 +14,7 @@ export interface SidebarCallbacks {
   toggleStarred(): void;
   folderMenu(path: string, x: number, y: number): void;
   workdirMenu(x: number, y: number): void;
-  /** 工作目录在侧栏上的显示，如 “📁 2024”“☁ 海边写真” */
+  /** 工作目录在侧栏上的名字，如 “2024”“海边写真”（图标侧栏自己加） */
   workdirLabel(workdir: string): string;
 }
 
@@ -108,15 +110,15 @@ export class Sidebar {
     if (wd) {
       const photos = library.folders.reduce((n, f) => n + f.count, 0);
       html += `
-        <div class="sb-head">${t('工作目录')}${starOn ? `<span class="sb-head-note">${t('· 只列有星标的')}</span>` : ''}</div>
+        <div class="sb-head">${t('相册')}${starOn ? `<span class="sb-head-note">${t('· 只列有星标的')}</span>` : ''}</div>
         <div class="sb-workdir" title="${esc(t('点击切换'))}">
-          <span class="sb-name">${esc(this.cb.workdirLabel(wd))}</span>
+          <span class="sb-name">${isRemotePath(wd) ? ICONS.cloud : ICONS.folder} ${esc(this.cb.workdirLabel(wd))}</span>
           <span class="count">${t('{n} 个相册 · {m} 张', { n: library.folders.length, m: photos })}</span>
         </div>`;
     } else {
       html += `
-        <div class="sb-head">${t('工作目录')}</div>
-        <div class="sb-workdir"><span class="sb-name">${t('选择工作目录')}</span></div>`;
+        <div class="sb-head">${t('相册')}</div>
+        <div class="sb-workdir"><span class="sb-name">${ICONS.folder} ${t('选择工作目录')}</span></div>`;
     }
     this.top.innerHTML = html;
     if (this.filterWorkdir !== wd) {

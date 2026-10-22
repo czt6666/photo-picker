@@ -394,6 +394,11 @@ class Remote {
       this.hello(ws);
       // 重连上了：断线期间可能错过了改动，整体刷新一次
       if (retry > 0) this.emit(code, { type: 'reload' });
+      // 第一次连上：连上之前那一小会儿（比如刚建好就开始上传）推送的新照片收不到，补拉一次
+      else
+        void this.fetch(code)
+          .then(() => this.emit(code, { type: 'photos', photos: [] }))
+          .catch(() => {});
     };
     ws.onmessage = (m) => {
       let ev: RemoteEvent;

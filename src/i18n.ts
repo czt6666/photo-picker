@@ -274,6 +274,7 @@ export const EN: Record<string, string> = {
   "已复制 ✓": "Copied ✓",
   "打开链接就能一起挑，星标实时同步。": "Open the link to pick together. Stars sync live.",
   "发送": "Send",
+  "打开远程相册": "Open remote album",
   "星标": "Star",
   "信息": "Info",
   "把链接发给别人一起挑": "Send the link to pick together",
