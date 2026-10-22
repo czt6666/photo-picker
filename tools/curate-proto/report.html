@@ -1,0 +1,114 @@
+<title>相册精选试跑</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500&family=Noto+Sans+SC:wght@400;600;800&display=swap">
+<style>
+/* 布局：上方一行结论数字 + 模型切换，下面按「选中 / 你星标但没选中 / 连拍合并 / 质量淘汰」分段的缩略图墙，像暗房里的样片板 */
+:root {
+  --bg: #f3f2ef; --panel: #ffffff; --fg: #1d1c1a; --muted: #6d6a63; --line: #dcd9d2;
+  --accent: #c2410c; --star: #b7791f; --bad: #a3343a;
+  --sans: "Noto Sans SC", -apple-system, "PingFang SC", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #161514; --panel: #201f1d; --fg: #ece9e3; --muted: #9c978d; --line: #34322e;
+  --accent: #f08a4b; --star: #e0b04f; --bad: #e07a80; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #161514; --panel: #201f1d; --fg: #ece9e3; --muted: #9c978d; --line: #34322e;
+  --accent: #f08a4b; --star: #e0b04f; --bad: #e07a80; color-scheme: dark }
+body { background: var(--bg); color: var(--fg); font-family: var(--sans); line-height: 1.6;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 28px 60px; }
+main { max-width: 1180px; margin: 0 auto; display: grid; gap: 36px; }
+h1 { font-size: 1.7rem; font-weight: 800; margin: 0; text-wrap: balance; }
+h2 { font-size: 1.1rem; font-weight: 600; margin: 0; display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+h2 small { font-weight: 400; color: var(--muted); font-size: .85rem; }
+.lead { color: var(--muted); margin: 6px 0 0; max-width: 65ch; }
+.stats { display: flex; flex-wrap: wrap; gap: 28px; }
+.stat b { display: block; font-family: var(--mono); font-size: 1.6rem; font-variant-numeric: tabular-nums; }
+.stat span { color: var(--muted); font-size: .8rem; letter-spacing: .04em; }
+.tabs { display: flex; gap: 8px; flex-wrap: wrap; }
+.tabs button { font: inherit; padding: 6px 14px; border-radius: 999px; border: 1px solid var(--line); background: var(--panel); color: var(--fg); cursor: pointer; }
+.tabs button[aria-pressed="true"] { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+.tabs button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+section { display: grid; gap: 12px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+figure { margin: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 4px; overflow: hidden; display: grid; }
+figure img { width: 100%; aspect-ratio: 1; object-fit: cover; display: block; background: var(--line); }
+figcaption { padding: 5px 8px 7px; font-size: .75rem; display: grid; gap: 1px; min-width: 0; }
+.name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--muted); }
+.score { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.tag { font-size: .72rem; }
+.tag.star { color: var(--star); }
+.tag.bad { color: var(--bad); }
+.tag.dup { color: var(--muted); }
+.empty { color: var(--muted); font-size: .9rem; }
+</style>
+
+<main>
+  <header>
+    <h1 id="title">相册精选试跑</h1>
+    <p class="lead" id="lead"></p>
+  </header>
+  <div class="stats" id="stats"></div>
+  <div class="tabs" id="tabs" role="group" aria-label="美学模型"></div>
+  <section><h2>机器选中的 <small id="c-chosen"></small></h2><div class="grid" id="g-chosen"></div></section>
+  <section><h2>你加了星标、机器没选的 <small id="c-missed"></small></h2><div class="grid" id="g-missed"></div></section>
+  <section><h2>连拍或相似，被合并掉的 <small>只列前 60 张，标出留下的是哪张</small></h2><div class="grid" id="g-dups"></div></section>
+  <section><h2>清晰度或曝光不过关，直接淘汰的 <small id="c-rej"></small></h2><div class="grid" id="g-rej"></div></section>
+</main>
+
+<script>
+const DATA = /*DATA*/null;
+const NAMES = { b32: "小模型 B/32", l14: "大模型 L/14" };
+const $ = (id) => document.getElementById(id);
+let cur = Object.keys(DATA.runs).includes("l14") ? "l14" : Object.keys(DATA.runs)[0];
+try { const s = localStorage.getItem("curate-model"); if (s && DATA.runs[s]) cur = s; } catch (e) {}
+
+function card(i, extra) {
+  const p = DATA.photos[i];
+  const f = document.createElement("figure");
+  const tags = [];
+  if (p.star) tags.push('<span class="tag star">★ 你加过星标</span>');
+  if (p.why.length) tags.push('<span class="tag bad">' + p.why.join("、") + '</span>');
+  if (extra) tags.push(extra);
+  const img = document.createElement("img");
+  img.src = p.src; img.alt = p.name; img.loading = "lazy";
+  f.appendChild(img);
+  const c = document.createElement("figcaption");
+  c.innerHTML = '<span class="score">美学 ' + (p.aes[cur] ?? "–") + '</span>' + tags.join("") ;
+  const n = document.createElement("span"); n.className = "name"; n.textContent = p.name;
+  c.appendChild(n);
+  f.appendChild(c);
+  return f;
+}
+function fill(id, list, extra) {
+  const g = $(id); g.replaceChildren();
+  if (!list.length) { g.innerHTML = '<p class="empty">没有</p>'; return; }
+  list.forEach((i) => g.appendChild(card(i, extra && extra(i))));
+}
+function render() {
+  const r = DATA.runs[cur];
+  document.querySelectorAll("#tabs button").forEach((b) => b.setAttribute("aria-pressed", b.dataset.k === cur));
+  const chosen = new Set(r.chosen);
+  const missed = DATA.starred.filter((i) => !chosen.has(i));
+  $("stats").innerHTML = [
+    [DATA.n, "张照片"], [r.groups, "去掉连拍后剩几组"], [r.chosen.length, "机器选中"],
+    [DATA.stars, "你加过星标"], [r.hit, "两边重合"], [r.ms + " ms", "每张打分耗时"],
+  ].map(([v, l]) => '<div class="stat"><b>' + v + '</b><span>' + l + '</span></div>').join("");
+  $("c-chosen").textContent = "按挑选顺序，第一张是最好看的";
+  $("c-missed").textContent = missed.length + " 张";
+  $("c-rej").textContent = DATA.rejected.length + " 张";
+  fill("g-chosen", r.chosen);
+  fill("g-missed", missed);
+  fill("g-dups", r.dups, (i) => '<span class="tag dup">留下的是 ' + (DATA.photos[i].dup[cur] || "") + '</span>');
+  fill("g-rej", DATA.rejected);
+}
+$("title").textContent = "相册精选试跑：" + DATA.album;
+$("lead").textContent = "从 " + DATA.n + " 张里按约 3% 挑了 " + DATA.k + " 张。星标是你在 PhotoPicker 里加的，用来对照机器选得准不准。美学分大致 1～10，5 分算普通，6 分以上算好看。";
+Object.keys(DATA.runs).forEach((k) => {
+  const b = document.createElement("button");
+  b.type = "button"; b.dataset.k = k; b.id = "tab-" + k; b.textContent = NAMES[k] || k;
+  b.onclick = () => { cur = k; try { localStorage.setItem("curate-model", k); } catch (e) {} render(); };
+  $("tabs").appendChild(b);
+});
+render();
+</script>
