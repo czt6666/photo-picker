@@ -16,7 +16,7 @@ import { closeMenu, contextMenu, esc, toast, type MenuItem } from './ui';
 import { formatBytes, Viewer } from './viewer';
 import { isBrowserShortcut, isMac, isTauri, isTouch, isWeb, mod as modKey, MOD_NAME, REVEAL_LABEL } from './platform';
 import { isRemotePath, parseRemotePath, parseShareInput, remote, SERVER, type RemoteAlbum, type RemoteEvent } from './remote';
-import { confirmBox, continueUpload, ensureName, promptBox, showConnect, showCreate, showShare, stopUpload, uploadingCode } from './remoteUi';
+import { confirmBox, continueUpload, promptBox, showConnect, showCreate, showShare, stopUpload, uploadingCode } from './remoteUi';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -56,6 +56,12 @@ const viewer = new Viewer($('viewer'), {
     }
     updateStatus();
     gridEl.focus({ preventScroll: true });
+  },
+  thumbRect(path) {
+    const i = store.indexOf(path);
+    if (i < 0) return null;
+    grid.scrollToIndex(i);
+    return grid.thumbOf(i)?.getBoundingClientRect() ?? null;
   },
 });
 
@@ -234,14 +240,14 @@ function renderEmpty(): void {
     html = `<div class="empty-card">
       <div class="big">☁</div>
       <h2>${t('PhotoPicker 网页版')}</h2>
-      <p class="dim">${t('打开别人发来的远程相册链接，或者把自己的照片传上来，发链接给别人一起挑。')}</p>
+      <p class="dim">${t('打开链接一起挑，或传照片发给别人。')}</p>
       <div class="row center"><button class="btn primary" id="empty-connect">${t('连接远程相册')}</button>
       <button class="btn" id="empty-create">${t('创建远程相册')}</button></div></div>`;
   } else if (!store.library.workdir) {
     html = `<div class="empty-card">
       <div class="big">📁</div>
       <h2>${t('选择一个照片文件夹')}</h2>
-      <p class="dim">${t('子文件夹会作为相册列在左侧，也可以把文件夹直接拖进来。')}</p>
+      <p class="dim">${t('子文件夹会列成相册，也能直接拖进来。')}</p>
       <button class="btn primary" id="empty-add">${t('选择文件夹')}</button></div>`;
   } else if (store.library.workdir && !store.library.folders.length && store.view.kind === 'none') {
     html = `<div class="empty-card"><h2>${t('这里没有找到照片')}</h2>
@@ -302,9 +308,6 @@ function starTargets(): Photo[] {
 async function toggleStar(photos: Photo[]): Promise<void> {
   const { starred: target, changed } = planToggle(photos);
   if (!changed.length) return;
-  // 远程相册的星标大家共用、会显示是谁加的：第一次先问名字
-  if (changed.some((p) => p.remote) && !(await ensureName())) return;
-  changed.forEach((p) => p.remote && (p.starredBy = target ? remote.name : null));
   // 先改界面（乐观更新），写盘失败再改回来：按下 S 的瞬间就要看到星星
   changed.forEach((p) => (p.starred = target));
   grid.refreshCells();
@@ -342,7 +345,7 @@ async function toggleStar(photos: Photo[]): Promise<void> {
 /** 星级（Lightroom 的星级）：数字键 1～5 标成几星，已经全是这个星级时再按一次 = 清除；0 = 清除。不动星标。 */
 async function rate(photos: Photo[], n: number): Promise<void> {
   if (photos.some((p) => p.remote)) {
-    toast(t('远程相册只用星标挑选，不支持星级'), 'warn');
+    toast(t('远程相册不支持星级'), 'warn');
     photos = photos.filter((p) => !p.remote);
   }
   const { rating, changed } = planRate(photos, n);
@@ -581,37 +584,90 @@ const applyCompact = () => grid.setCompact(isTouch && phone.matches ? prefs.get(
 applyCompact();
 phone.addEventListener('change', applyCompact);
 {
-  const pts = new Map<number, { x: number; y: number }>();
-  let base = 0;
-  const dist = () => {
-    const [a, b] = [...pts.values()];
-    return Math.hypot(a.x - b.x, a.y - b.y);
-  };
-  gridEl.addEventListener('pointerdown', (e) => {
-    if (e.pointerType !== 'touch') return;
-    pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    if (pts.size === 2) base = dist();
-  });
-  gridEl.addEventListener('pointermove', (e) => {
-    if (!pts.has(e.pointerId)) return;
-    pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    const cols = grid.columns;
-    if (pts.size !== 2 || !cols || !base) return;
-    const r = dist() / base;
-    // 张开 = 放大 = 每行少一张；捏拢 = 每行多一张
-    const next = r > 1.3 ? cols - 1 : r < 0.77 ? cols + 1 : cols;
-    if (next !== cols && next >= 2 && next <= 6) {
+  // 学 iPhone：捏的过程中整片方格跟着手指缩放，松手后吸到最近的列数，再用动画落位。
+  // 手指中间那张照片始终待在手指中间。
+  const inner = $('grid-inner');
+  // 用 touch 事件而不是 pointer：两根手指放上去时要 preventDefault，不然浏览器把它当滚动，半路就把手指“收走”了
+  let pinch: { d: number; cols: number; mx: number; my: number; i: number; fx: number; fy: number; s: number } | null = null;
+  const MIN_COLS = 1;
+  const MAX_COLS = 7;
+  const two = (e: TouchEvent) => [e.touches[0], e.touches[1]];
+  gridEl.addEventListener(
+    'touchstart',
+    (e) => {
+      const cols = grid.columns;
+      if (e.touches.length !== 2 || !cols) return;
+      e.preventDefault();
+      const [a, b] = two(e);
+      const mx = (a.clientX + b.clientX) / 2;
+      const my = (a.clientY + b.clientY) / 2;
+      let i = grid.indexAt(mx, my);
+      if (i < 0) i = grid.indexAt(gridEl.getBoundingClientRect().left + 4, my);
+      const box = i >= 0 ? grid.cellBox(i) : null;
+      const ir = inner.getBoundingClientRect();
+      const fx = box ? (mx - ir.left - box.x) / box.w : 0.5;
+      const fy = box ? (my - ir.top - box.y) / box.h : 0.5;
+      pinch = { d: Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY), cols, mx, my, i, fx, fy, s: 1 };
+      inner.style.transition = 'none';
+      inner.style.transformOrigin = `${mx - ir.left}px ${my - ir.top}px`;
+    },
+    { passive: false },
+  );
+  gridEl.addEventListener(
+    'touchmove',
+    (e) => {
+      if (!pinch || e.touches.length < 2) return;
+      e.preventDefault();
+      const [a, b] = two(e);
+      // 灵敏一点：手指距离的变化放大 1.4 倍；到头了像橡皮筋一样越拉越紧
+      const raw = Math.pow(Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY) / Math.max(1, pinch.d), 1.4);
+      const lo = pinch.cols / MAX_COLS;
+      const hi = pinch.cols / MIN_COLS;
+      pinch.s = raw < lo ? lo * Math.pow(raw / lo, 0.3) : raw > hi ? hi * Math.pow(raw / hi, 0.3) : raw;
+      inner.style.transform = `scale(${pinch.s})`;
+    },
+    { passive: false },
+  );
+  const settle = () => {
+    const p = pinch!;
+    pinch = null;
+    const s = p.s;
+    // 稍微捏一点就换一档；捏得多就按比例跳几档
+    let next = Math.round(p.cols / s);
+    if (s > 1.08) next = Math.min(next, p.cols - 1);
+    if (s < 0.92) next = Math.max(next, p.cols + 1);
+    next = Math.max(MIN_COLS, Math.min(MAX_COLS, next));
+    if (next !== p.cols) {
       prefs.set('touchCols', next);
       grid.setCompact(next);
-      base = dist();
     }
-  });
-  const up = (e: PointerEvent) => {
-    pts.delete(e.pointerId);
-    if (pts.size < 2) base = 0;
+    // 换了列数后，把手指下的那张照片挪回手指下面，再从当前的大小动画缩放到 1
+    const box = p.i >= 0 ? grid.cellBox(p.i) : null;
+    const gr = gridEl.getBoundingClientRect();
+    let ox = p.mx - gr.left;
+    let oy = p.my - gr.top + gridEl.scrollTop;
+    if (box) {
+      const px = box.x + p.fx * box.w;
+      const py = box.y + p.fy * box.h;
+      gridEl.scrollTop = py - (p.my - gr.top);
+      ox = px;
+      oy = py;
+    }
+    const k = s * (next / p.cols);
+    inner.style.transition = 'none';
+    inner.style.transformOrigin = `${ox}px ${oy}px`;
+    inner.style.transform = `scale(${k})`;
+    void inner.offsetWidth;
+    inner.style.transition = 'transform 0.32s cubic-bezier(0.2, 0.9, 0.25, 1)';
+    inner.style.transform = '';
   };
-  gridEl.addEventListener('pointerup', up);
-  gridEl.addEventListener('pointercancel', up);
+  const end = (e: TouchEvent) => {
+    if (pinch && e.touches.length < 2) settle();
+  };
+  gridEl.addEventListener('touchend', end);
+  gridEl.addEventListener('touchcancel', end);
+  // iPhone 的 Safari 不管 maximum-scale，自己会缩放整个网页：拦掉
+  document.addEventListener('gesturestart', (e) => e.preventDefault());
 }
 
 // 触控板捏合（webview 里是带 ctrlKey 的滚轮事件）或 ⌘/Ctrl+滚轮：调整缩略图大小
@@ -681,9 +737,6 @@ function showSettings(): void {
     .join('');
   el.innerHTML = `<div class="modal-card help settings"><h2>${t('设置')}</h2>
     <div class="field"><label class="lang">${t('语言')} <select class="input">${opts}</select></label></div>
-    <div class="field"><div class="label">${t('远程相册')}</div>
-      <label class="lang">${t('你的名字')} <input class="input s-name" maxlength="40" value="${esc(remote.name)}"></label>
-    </div>
     <div class="actions"><button class="btn primary">${t('关闭')}</button></div></div>`;
   el.hidden = false;
   const close = () => {
@@ -692,7 +745,6 @@ function showSettings(): void {
   };
   el.querySelector('button')!.addEventListener('click', close);
   el.querySelector('select')!.addEventListener('change', (e) => setLang(((e.target as HTMLSelectElement).value || null) as Lang | null));
-  el.querySelector<HTMLInputElement>('.s-name')!.addEventListener('change', (e) => (remote.name = (e.target as HTMLInputElement).value));
   el.onclick = (e) => e.target === el && close();
 }
 $('btn-settings').addEventListener('click', showSettings);
@@ -824,7 +876,7 @@ function remoteItems(a: RemoteAlbum): MenuItem[] {
           {
             label: t('删除远程相册'),
             action: async () => {
-              if (!(await confirmBox(t('删除远程相册「{name}」？', { name: a.name }), t('服务器上的预览和所有人的星标都会删掉，你电脑上的原图不受影响。'), t('删除')))) return;
+              if (!(await confirmBox(t('删除远程相册「{name}」？', { name: a.name }), t('线上图片和星标都会删掉，原图不受影响'), t('删除')))) return;
               try {
                 await remote.destroy(code);
                 await forgetRemote(code);

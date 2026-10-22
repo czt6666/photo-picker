@@ -1,9 +1,9 @@
-// 远程相册的对话框：创建、连接、填名字。和导出对话框共用同一个弹层（#export-dialog）。
+// 远程相册的对话框：创建、连接、分享。和导出对话框共用同一个弹层（#export-dialog）。
 
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { api } from './api';
 import { t } from './i18n';
-import { isTauri, isWeb } from './platform';
+import { isTauri, isTouch, isWeb } from './platform';
 import { remote, RemoteError, shareLink, type RemoteAlbum } from './remote';
 import { jobsFromFiles, jobsFromLocal, uploadJobs, type LocalItem, type SourceFile, type UploadJob, type UploadProgress } from './remoteUpload';
 import { store } from './store';
@@ -45,56 +45,16 @@ export async function copyText(text: string): Promise<boolean> {
   }
 }
 
-const nameField = () =>
-  remote.name
-    ? ''
-    : `<div class="field"><div class="label">${t('你的名字')}</div>
-       <input class="input wide r-name" maxlength="40" placeholder="${t('大家能看到星标是谁加的')}"></div>`;
-
-function takeName(el: HTMLElement): boolean {
-  const input = el.querySelector<HTMLInputElement>('.r-name');
-  if (!input) return true;
-  if (!input.value.trim()) {
-    input.focus();
-    toast(t('请填写你的名字'), 'warn');
-    return false;
-  }
-  remote.name = input.value;
-  return true;
-}
-
-/** 第一次在远程相册里加星前问一下名字（大家能看到谁加的星） */
-export function ensureName(): Promise<boolean> {
-  if (remote.name) return Promise.resolve(true);
-  return new Promise((resolve) => {
-    const { el, close } = modal(`<h2>${t('你的名字')}</h2>
-      <p class="dim">${t('远程相册的星标大家共用，会显示是谁加的。')}</p>
-      ${nameField()}
-      <div class="actions"><button class="btn cancel">${t('取消')}</button><button class="btn primary ok">${t('好')}</button></div>`);
-    const done = (ok: boolean) => {
-      close();
-      resolve(ok);
-    };
-    el.querySelector('.cancel')!.addEventListener('click', () => done(false));
-    const ok = () => takeName(el) && done(true);
-    el.querySelector('.ok')!.addEventListener('click', ok);
-    el.querySelector<HTMLInputElement>('.r-name')!.addEventListener('keydown', (e) => e.key === 'Enter' && ok());
-    el.querySelector<HTMLInputElement>('.r-name')!.focus();
-  });
-}
-
 /** 连接远程相册：粘贴链接或相册码 */
 export function showConnect(onDone: (a: RemoteAlbum) => void): void {
   const { el, close } = modal(`<h2>${t('连接远程相册')}</h2>
     <div class="field"><div class="label">${t('链接或相册码')}</div>
       <input class="input wide r-link" placeholder="https://…/r/ABC234" autocomplete="off" spellcheck="false"></div>
-    ${nameField()}
     <div class="actions"><button class="btn cancel">${t('取消')}</button><button class="btn primary ok">${t('连接')}</button></div>`);
   const link = el.querySelector<HTMLInputElement>('.r-link')!;
   link.focus();
   const go = async () => {
     if (!link.value.trim()) return link.focus();
-    if (!takeName(el)) return;
     try {
       const a = await remote.connect(link.value);
       close();
@@ -154,7 +114,7 @@ const panel = {
 /** 后台上传，进度显示在上传面板里，完成后提示 */
 async function runUpload(a: RemoteAlbum, jobs: UploadJob[], onProgress: (text: string) => void): Promise<void> {
   if (uploading) {
-    toast(t('正在上传，等这批传完'), 'warn');
+    toast(t('正在上传，稍等'), 'warn');
     return;
   }
   const job = { code: a.code, cancel: false };
@@ -170,7 +130,7 @@ async function runUpload(a: RemoteAlbum, jobs: UploadJob[], onProgress: (text: s
   try {
     const r = await uploadJobs(a.code, jobs, report, () => job.cancel);
     onProgress('');
-    if (job.cancel) toast(t('已停止，传了 {n} 张。再传一次会接着传。', { n: r.done }), 'warn', 5000);
+    if (job.cancel) toast(t('已停止，传了 {n} 张，可接着传', { n: r.done }), 'warn', 5000);
     else if (r.failed.length) {
       const names = r.failed.slice(0, 3).map((f) => `${f.label}（${f.error}）`).join('；');
       toast(t('传完了，{n} 张失败：{names}', { n: r.failed.length, names }), 'error', 8000);
@@ -229,7 +189,7 @@ export async function showCreate(defaultDir: string | null, onCreated: (a: Remot
     if (!dir) return;
   }
   const { el, close } = modal(`<h2>${t('创建远程相册')}</h2>
-    <p class="dim">${t('拿到链接的人都能打开、一起加星标。只上传缩小的预览图，RAW 和原图都留在你电脑上。')}</p>
+    <p class="dim">${t('只传小图，原图和 RAW 留在本机')}</p>
     <div class="field"><div class="label">${t('照片')}</div>
       ${
         isTauri
@@ -238,7 +198,6 @@ export async function showCreate(defaultDir: string | null, onCreated: (a: Remot
       }
     </div>
     <div class="field"><div class="label">${t('相册名')}</div><input class="input wide r-title" maxlength="40"></div>
-    ${nameField()}
     <div class="actions"><button class="btn cancel">${t('取消')}</button><button class="btn primary ok">${t('创建并上传')}</button></div>`);
   const title = el.querySelector<HTMLInputElement>('.r-title')!;
   const showDir = () => {
@@ -271,7 +230,6 @@ export async function showCreate(defaultDir: string | null, onCreated: (a: Remot
   const create = async (password: string | null) => {
     if (isWeb && !files.length) return toast(t('请选择照片'), 'warn');
     if (!title.value.trim()) return title.focus();
-    if (!takeName(el)) return;
     busy(true);
     try {
       let jobs: UploadJob[];
@@ -307,10 +265,14 @@ export async function showCreate(defaultDir: string | null, onCreated: (a: Remot
 /** 分享：显示链接，一键复制。建完相册自动弹出，顶栏「分享」也是它 */
 export function showShare(a: RemoteAlbum): void {
   const link = shareLink(a);
+  // 手机上有系统分享面板（微信、信息、AirDrop）就多一个「发送」
+  const canSend = isTouch && typeof navigator.share === 'function';
   const { el, close } = modal(`<h2>${t('分享「{name}」', { name: esc(a.name) })}</h2>
-    <p class="dim">${t('把链接发给模特（或任何人），打开就能一起挑，星标实时同步。')}</p>
-    <div class="row"><input class="input r-link" readonly><button class="btn primary r-copy">${t('复制链接')}</button></div>
-    <div class="actions"><button class="btn cancel">${t('关闭')}</button></div>`);
+    <p class="dim">${t('打开链接就能一起挑，星标实时同步。')}</p>
+    <input class="input wide r-link share-link" readonly>
+    <div class="actions share-actions"><button class="btn cancel">${t('关闭')}</button>
+      ${canSend ? `<button class="btn r-send">${t('发送')}</button>` : ''}
+      <button class="btn primary r-copy">${t('复制链接')}</button></div>`);
   const input = el.querySelector<HTMLInputElement>('.r-link')!;
   input.value = link;
   input.addEventListener('focus', () => input.select());
@@ -318,6 +280,9 @@ export function showShare(a: RemoteAlbum): void {
   btn.addEventListener('click', async () => {
     if (await copyText(link)) btn.textContent = t('已复制 ✓');
     else input.select();
+  });
+  el.querySelector('.r-send')?.addEventListener('click', () => {
+    navigator.share({ title: a.name, url: link }).catch(() => {});
   });
   el.querySelector('.cancel')!.addEventListener('click', close);
   btn.focus();
@@ -344,7 +309,7 @@ export async function continueUpload(a: RemoteAlbum, onProgress: (text: string) 
 function askPassword(): Promise<string | null> {
   return new Promise((resolve) => {
     const { el, close } = modal(`<h2>${t('创建密码')}</h2>
-      <p class="dim">${t('这台服务器设了创建密码，问一下服务器的管理员。')}</p>
+      <p class="dim">${t('需要创建密码，问问管理员')}</p>
       <input class="input wide r-pw" type="password">
       <div class="actions"><button class="btn cancel">${t('取消')}</button><button class="btn primary ok">${t('好')}</button></div>`);
     const pw = el.querySelector<HTMLInputElement>('.r-pw')!;

@@ -488,6 +488,8 @@ async fn delete_photos(State(st): S, ClientIp(ip): ClientIp, UrlPath(code): UrlP
 struct StarReq {
     ids: Vec<i64>,
     starred: bool,
+    /// 以前会记下是谁加的星；现在不问名字了，留着兼容旧客户端
+    #[serde(default)]
     by: String,
 }
 
@@ -496,7 +498,7 @@ async fn set_stars(State(st): S, ClientIp(ip): ClientIp, UrlPath(code): UrlPath<
     if req.ids.len() > 10_000 {
         return Err(ApiError::bad("一次太多了"));
     }
-    let by = clean_name(&req.by, "名字")?;
+    let by: String = req.by.trim().chars().filter(|c| !c.is_control()).take(NAME_MAX).collect();
     let changed = st.db.set_stars(&a.id, &req.ids, req.starred, &by)?;
     if !changed.is_empty() {
         st.hub.send(&a.id, json!({ "type": "stars", "ids": changed, "starred": req.starred, "by": by }));

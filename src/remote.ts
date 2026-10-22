@@ -353,7 +353,7 @@ class Remote {
     for (const [code, ids] of byCode) {
       const a = this.get(code);
       if (!a) continue;
-      await this.call(a, 'PUT', `/albums/${code}/stars`, { ids, starred, by: this.name || t('匿名') });
+      await this.call(a, 'PUT', `/albums/${code}/stars`, { ids, starred });
       this.applyStars(code, ids, starred, this.name);
       for (const f of this.libraryFromCache(code).folders) out[f.path] = f.starred;
     }

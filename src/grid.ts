@@ -117,6 +117,24 @@ export class Grid {
     this.relayout(anchor);
   }
 
+  /** 第 i 张格子在 grid-inner 里的位置和大小 */
+  cellBox(i: number): { x: number; y: number; w: number; h: number } | null {
+    const p = this.layout.pos(i);
+    if (!p) return null;
+    return { x: this.pad + p.col * this.colW, y: p.y, w: this.colW - this.gap, h: this.cellH };
+  }
+
+  /** 屏幕上 (x, y) 处是第几张（没有就 -1） */
+  indexAt(x: number, y: number): number {
+    const cell = document.elementFromPoint(x, y)?.closest<HTMLElement>('.cell');
+    return cell && this.inner.contains(cell) ? Number(cell.dataset.i) : -1;
+  }
+
+  /** 已经画出来的第 i 张的缩略图（看大图从它放大出来） */
+  thumbOf(i: number): HTMLImageElement | null {
+    return this.cells.get(i)?.querySelector<HTMLImageElement>('.thumb') ?? null;
+  }
+
   get cellSize(): number {
     return this.size;
   }
@@ -366,7 +384,7 @@ export class Grid {
     const c = document.createElement('div');
     c.className = 'cell';
     c.innerHTML =
-      `<span class="frame"><img class="thumb" decoding="async" draggable="false" alt=""><button class="badge" tabindex="-1" title="${t('星标（空格）')}">★</button><span class="raw-tag"></span><span class="rate" hidden></span><span class="by" hidden></span></span>`;
+      `<span class="frame"><img class="thumb" decoding="async" draggable="false" alt=""><button class="badge" tabindex="-1" title="${t('星标（空格）')}">★</button><span class="raw-tag"></span><span class="rate" hidden></span></span>`;
     const img = c.querySelector('img')!;
     img.addEventListener('load', () => c.classList.add('loaded'));
     img.addEventListener('error', () => {
@@ -423,11 +441,6 @@ export class Grid {
     const rate = c.querySelector<HTMLElement>('.rate')!;
     if (rate.textContent !== stars) rate.textContent = stars;
     rate.hidden = !stars;
-    // 远程相册：谁加的星
-    const by = c.querySelector<HTMLElement>('.by')!;
-    const who = p.starred ? (p.starredBy ?? '') : '';
-    if (by.textContent !== who) by.textContent = who;
-    by.hidden = !who;
   }
 
   private recycle(c: HTMLElement): void {

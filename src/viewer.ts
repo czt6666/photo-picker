@@ -32,6 +32,8 @@ export interface ViewerCallbacks {
   toggleStar(photos: Photo[]): Promise<void>;
   /** 数字键：1～5 标成几星，0 清除 */
   rate(photos: Photo[], rating: number): Promise<void>;
+  /** 网格里这张缩略图在屏幕上的位置（打开 / 关闭时从它放大、缩回它；看不到就 null） */
+  thumbRect?(path: string): DOMRect | null;
 }
 
 interface Dims {
@@ -92,6 +94,11 @@ export class Viewer {
   private starBtn: HTMLButtonElement;
   private zoomBtn: HTMLButtonElement;
   private starMark: HTMLElement;
+  /** 手机底栏（学 iPhone 的“照片”）：星标 + 信息 */
+  private barStar: HTMLButtonElement;
+  private sheetBody: HTMLElement;
+  /** 左右滑时露出来的前一张 / 后一张 */
+  private peek: HTMLImageElement[];
   /** 顶栏的五颗星：显示 / 点击设置星级 */
   private rateEl: HTMLElement;
   private errorEl: HTMLElement;
@@ -111,6 +118,14 @@ export class Viewer {
     this.starMark = $('.v-starmark');
     this.errorEl = $('.v-error');
     this.strip = new Strip($('.v-strip'), $('.v-strip-inner'), (i) => this.go(i));
+    this.barStar = $<HTMLButtonElement>('.v-bstar');
+    this.barStar.addEventListener('click', () => void this.toggleStar());
+    const info = $<HTMLButtonElement>('.v-binfo');
+    info.innerHTML = ICON_INFO;
+    info.addEventListener('click', () => this.toggleSheet());
+    this.sheetBody = $('.v-sheet-body');
+    $('.v-sheet').addEventListener('click', (e) => (e.target as HTMLElement).closest('.v-grip') && this.toggleSheet(false));
+    this.peek = [...root.querySelectorAll<HTMLImageElement>('.v-peek-img')];
 
     $('.v-back').addEventListener('click', () => this.close());
     this.starBtn.addEventListener('click', () => this.toggleStar());
@@ -166,11 +181,28 @@ export class Viewer {
     this.list = list.slice();
     this.isOpen = true;
     this.root.hidden = false;
-    this.root.classList.remove('bare');
+    this.root.classList.remove('bare', 'sheet-open');
     this.strip.setList(this.list);
     this.index = -1;
     this.wheel.reset();
     this.go(index, true);
+    this.zoomFrom(this.cb.thumbRect?.(this.list[index].path) ?? null);
+  }
+
+  /** 学 iPhone：照片从网格里那个小格子放大出来 */
+  private zoomFrom(r: DOMRect | null): void {
+    const s = this.stage.getBoundingClientRect();
+    if (!r || !r.width || !s.width) return;
+    const k = Math.max(r.width / s.width, r.height / s.height);
+    const dx = r.left + r.width / 2 - (s.left + s.width / 2);
+    const dy = r.top + r.height / 2 - (s.top + s.height / 2);
+    this.root.classList.add('zooming');
+    this.stage.style.transition = 'none';
+    this.stage.style.transform = `translate(${dx}px, ${dy}px) scale(${k})`;
+    void this.stage.offsetWidth;
+    this.stage.style.transition = 'transform 0.34s cubic-bezier(0.2, 0.9, 0.25, 1)';
+    this.stage.style.transform = '';
+    window.setTimeout(() => this.root.classList.remove('zooming'), 340);
   }
 
   close(): void {
@@ -200,6 +232,8 @@ export class Viewer {
     this.starBtn.textContent = p.starred ? t('★ 已加星标') : t('☆ 星标');
     this.starBtn.classList.toggle('on', p.starred);
     this.starMark.hidden = !p.starred;
+    this.barStar.innerHTML = p.starred ? ICON_STAR_ON : ICON_STAR;
+    this.barStar.classList.toggle('on', p.starred);
     this.rateEl.querySelectorAll('button').forEach((b) => b.classList.toggle('on', Number(b.dataset.n) <= p.rating));
     this.strip.refresh();
   }
@@ -636,6 +670,28 @@ export class Viewer {
     if (info?.exposure) parts.push(info.exposure);
     parts.push(p.dir);
     this.infoEl.textContent = parts.join('   ·   ');
+    // 信息面板：第一行是拍摄时间（大字），下面文件名、尺寸、相机、曝光
+    const rows: string[] = [];
+    if (info?.taken) rows.push(info.taken);
+    rows.push(rawTag(p) ? `${p.name} + ${rawTag(p)}` : p.name);
+    rows.push([info?.width ? `${info.width} × ${info.height}` : '', formatBytes(p.size)].filter(Boolean).join('  ·  '));
+    const cam = [info?.camera, info?.lens].filter(Boolean).join('  ·  ');
+    if (cam) rows.push(cam);
+    if (info?.exposure) rows.push(info.exposure);
+    this.sheetBody.replaceChildren(
+      ...rows.map((text, i) => {
+        const d = document.createElement('div');
+        d.className = i === 0 ? 'v-sheet-title' : 'v-sheet-row';
+        d.textContent = text;
+        return d;
+      }),
+    );
+  }
+
+  /** 信息面板（学 iPhone：点 ⓘ 或往上推照片） */
+  private toggleSheet(open = !this.root.classList.contains('sheet-open')): void {
+    this.root.classList.toggle('sheet-open', open);
+    if (open) this.root.classList.remove('bare');
   }
 
   // ---------------------------------------------------------------------------
@@ -668,7 +724,7 @@ export class Viewer {
   // 放大后单指拖 = 平移；双指捏 = 缩放；连点两下 = 放大 / 还原；轻点一下 = 藏起 / 露出工具栏。
   private touches = new Map<number, { x: number; y: number }>();
   /** 这次手指按下的起点；axis = 认定的方向（动了 10px 以后才定，定了就不改） */
-  private swipe: { x: number; y: number; t: number; axis: 'x' | 'y' | null } | null = null;
+  private swipe: { x: number; y: number; t: number; axis: 'x' | 'y' | 'up' | null; vx: number; lx: number; lt: number } | null = null;
   private pinch: { d: number; scale: number } | null = null;
   private lastTap = 0;
   private tapTimer = 0;
@@ -688,7 +744,8 @@ export class Viewer {
         return;
       }
       if (this.touches.size > 2) return;
-      this.swipe = { x: e.clientX, y: e.clientY, t: performance.now(), axis: null };
+      const now = performance.now();
+      this.swipe = { x: e.clientX, y: e.clientY, t: now, axis: null, vx: 0, lx: e.clientX, lt: now };
     }
     if (e.button !== 0 || this.scale === null) return;
     this.drag = { x: e.clientX, y: e.clientY, px: this.panX, py: this.panY };
@@ -709,13 +766,22 @@ export class Viewer {
       if (sw && this.scale === null && !this.pinch) {
         const dx = e.clientX - sw.x;
         const dy = e.clientY - sw.y;
-        if (!sw.axis && Math.hypot(dx, dy) > 10) sw.axis = Math.abs(dx) > Math.abs(dy) ? 'x' : dy > 0 ? 'y' : null;
+        // 手指速度（平滑一下），松手时判断是不是“甩”
+        const now = performance.now();
+        if (now > sw.lt) sw.vx = 0.7 * ((e.clientX - sw.lx) / (now - sw.lt)) + 0.3 * sw.vx;
+        sw.lx = e.clientX;
+        sw.lt = now;
+        if (!sw.axis && Math.hypot(dx, dy) > 8) {
+          sw.axis = Math.abs(dx) > Math.abs(dy) ? 'x' : dy > 0 ? 'y' : 'up';
+          // 信息面板开着时不左右翻（照片缩在上面），只认上下
+          if (sw.axis === 'x' && this.root.classList.contains('sheet-open')) sw.axis = null;
+          if (sw.axis === 'x') this.preparePeek();
+        }
         if (sw.axis === 'x') {
           // 到头了还往外拉：只走三分之一，像拉橡皮筋
           const edge = (dx > 0 && this.index === 0) || (dx < 0 && this.index === this.list.length - 1);
-          this.stage.style.transition = 'none';
-          this.stage.style.transform = `translateX(${edge ? dx / 3 : dx}px)`;
-        } else if (sw.axis === 'y') {
+          this.setTrack(edge ? dx / 3 : dx, false);
+        } else if (sw.axis === 'y' && !this.root.classList.contains('sheet-open')) {
           const k = Math.max(0, dy);
           this.stage.style.transition = 'none';
           this.stage.style.transform = `translate(${dx}px, ${k}px) scale(${Math.max(0.6, 1 - k / 800)})`;
@@ -743,13 +809,18 @@ export class Viewer {
         const w = this.stage.clientWidth;
         if (sw.axis === 'x' && this.scale === null) {
           const d = dx < 0 ? 1 : -1;
-          const fling = dt < 300 && Math.abs(dx) > 40;
+          // 甩一下（速度够、方向对）或拖过三分之一就翻页
+          const fling = Math.abs(sw.vx) > 0.35 && Math.sign(-sw.vx) === d;
           const can = this.index + d >= 0 && this.index + d < this.list.length;
-          if (can && (fling || Math.abs(dx) > w / 2)) this.slideTo(d);
+          if (can && (fling || Math.abs(dx) > w / 3)) this.slideTo(d, Math.abs(sw.vx));
           else this.springBack();
+        } else if (sw.axis === 'y' && this.root.classList.contains('sheet-open')) {
+          if (dy > 40) this.toggleSheet(false);
         } else if (sw.axis === 'y' && this.scale === null) {
           if (dy > 100 || (dt < 300 && dy > 50)) this.swipeClose();
           else this.springBack();
+        } else if (sw.axis === 'up') {
+          if (dy < -40) this.toggleSheet(true);
         } else if (Math.abs(dx) < 10 && Math.abs(dy) < 10) {
           this.onTap(e);
         }
@@ -773,7 +844,10 @@ export class Viewer {
     }
     this.lastTap = now;
     clearTimeout(this.tapTimer);
-    this.tapTimer = window.setTimeout(() => this.root.classList.toggle('bare'), 260);
+    this.tapTimer = window.setTimeout(() => {
+      if (this.root.classList.contains('sheet-open')) this.toggleSheet(false);
+      else this.root.classList.toggle('bare');
+    }, 260);
   }
 
   private cancelSwipe(): void {
@@ -781,35 +855,95 @@ export class Viewer {
     this.swipe = null;
   }
 
+  /** 开始左右拖：把前一张、后一张摆到两边（有预加载好的大图就用大图，没有先用缩略图） */
+  private preparePeek(): void {
+    const r = this.stage.getBoundingClientRect();
+    const vr = this.root.getBoundingClientRect();
+    const max = this.previewMax();
+    [-1, 1].forEach((d, k) => {
+      const img = this.peek[k];
+      const p = this.list[this.index + d];
+      img.style.cssText = `left:${r.left - vr.left}px;top:${r.top - vr.top}px;width:${r.width}px;height:${r.height}px;transition:none`;
+      if (!p) {
+        img.hidden = true;
+        return;
+      }
+      const ready = this.loader.cache.get(this.keyFor(p, max));
+      const src = ready?.src ?? thumbUrl(p);
+      if (img.getAttribute('src') !== src) img.src = src;
+      img.hidden = false;
+    });
+    this.setTrack(0, false);
+  }
+
+  /** 整条“胶片”平移 x：当前这张 + 两边各一张，中间留一道缝（和 iPhone 一样） */
+  private setTrack(x: number, animate: string | false): void {
+    const w = this.stage.clientWidth + PEEK_GAP;
+    const tr = animate || 'none';
+    this.stage.style.transition = animate ? `transform ${animate}` : 'none';
+    this.stage.style.transform = x ? `translate3d(${x}px, 0, 0)` : '';
+    this.peek[0].style.transition = this.peek[1].style.transition = animate ? `transform ${tr}` : 'none';
+    this.peek[0].style.transform = `translate3d(${x - w}px, 0, 0)`;
+    this.peek[1].style.transform = `translate3d(${x + w}px, 0, 0)`;
+  }
+
+  private hidePeek(): void {
+    for (const img of this.peek) img.hidden = true;
+  }
+
   /** 松手没过线：弹回原位 */
   private springBack(): void {
-    this.stage.style.transition = 'transform 0.25s cubic-bezier(0.2, 0.8, 0.2, 1)';
-    this.stage.style.transform = '';
+    if (this.swipe?.axis === 'x') {
+      this.setTrack(0, '0.3s cubic-bezier(0.2, 0.9, 0.3, 1)');
+      window.setTimeout(() => this.hidePeek(), 300);
+    } else {
+      this.stage.style.transition = 'transform 0.25s cubic-bezier(0.2, 0.8, 0.2, 1)';
+      this.stage.style.transform = '';
+    }
     this.root.style.removeProperty('--v-bg');
   }
 
-  /** 翻页动画：当前这张滑出去，下一张从另一边滑进来 */
-  private slideTo(d: number): void {
-    const w = this.stage.clientWidth;
+  /**
+   * 翻页：整条胶片接着手指的速度滑到下一张，停稳后再把“当前”换成它。
+   * 下一张早就预加载好了，换的那一下看不出来。
+   */
+  private slideTo(d: number, speed = 0): void {
+    const w = this.stage.clientWidth + PEEK_GAP;
+    const cur = new DOMMatrixReadOnly(getComputedStyle(this.stage).transform).m41 || 0;
+    const left = Math.abs(-d * w - cur);
+    // 甩得快就滑得快：剩下的距离 / 手速，限制在 160～340ms
+    const ms = Math.round(Math.max(160, Math.min(340, speed > 0.1 ? left / speed : 300)));
     this.sliding = true;
-    this.stage.style.transition = 'transform 0.18s ease-out';
-    this.stage.style.transform = `translateX(${-d * w}px)`;
+    this.setTrack(-d * w, `${ms}ms cubic-bezier(0.25, 0.9, 0.3, 1)`);
     window.setTimeout(() => {
       this.step(d);
-      this.stage.style.transition = 'none';
-      this.stage.style.transform = `translateX(${d * w * 0.35}px)`;
-      void this.stage.offsetWidth;
-      this.stage.style.transition = 'transform 0.22s cubic-bezier(0.2, 0.8, 0.2, 1)';
-      this.stage.style.transform = '';
-      window.setTimeout(() => (this.sliding = false), 220);
-    }, 170);
+      this.setTrack(0, false);
+      this.hidePeek();
+      this.sliding = false;
+    }, ms);
   }
 
-  /** 往下拖关掉：缩小淡出，然后回到网格 */
+  /** 往下拖关掉：缩回网格里那一格（看不到那一格就缩小淡出），然后回到网格 */
   private swipeClose(): void {
-    this.stage.style.transition = 'transform 0.2s ease-in, opacity 0.2s ease-in';
-    this.stage.style.transform += ' scale(0.8)';
-    this.stage.style.opacity = '0';
+    const p = this.current;
+    const r = p ? (this.cb.thumbRect?.(p.path) ?? null) : null;
+    const s = this.stage.getBoundingClientRect();
+    this.stage.style.transition = 'transform 0.26s cubic-bezier(0.3, 0.7, 0.3, 1), opacity 0.26s';
+    if (r && r.width && s.width) {
+      // 现在的 transform 已经带着手指拖动的位移和缩放：直接换成“落到那一格”的
+      const base = this.stage.style.transform;
+      this.stage.style.transform = '';
+      const b = this.stage.getBoundingClientRect();
+      this.stage.style.transform = base;
+      const k = Math.max(r.width / b.width, r.height / b.height);
+      const dx = r.left + r.width / 2 - (b.left + b.width / 2);
+      const dy = r.top + r.height / 2 - (b.top + b.height / 2);
+      void this.stage.offsetWidth;
+      this.stage.style.transform = `translate(${dx}px, ${dy}px) scale(${k})`;
+    } else {
+      this.stage.style.transform += ' scale(0.8)';
+      this.stage.style.opacity = '0';
+    }
     this.root.style.setProperty('--v-bg', '0');
     window.setTimeout(() => {
       this.close();
@@ -817,7 +951,7 @@ export class Viewer {
       this.stage.style.transform = '';
       this.stage.style.opacity = '';
       this.root.style.removeProperty('--v-bg');
-    }, 200);
+    }, 260);
   }
 
   private async rate(n: number): Promise<void> {
@@ -866,6 +1000,8 @@ export class Viewer {
 // -----------------------------------------------------------------------------
 
 const ITEM_W = 76;
+/** 左右滑时两张照片之间的缝 */
+const PEEK_GAP = 20;
 
 class Strip {
   private list: Photo[] = [];
@@ -965,3 +1101,11 @@ export function formatBytes(n: number): string {
   if (n < 1024 ** 3) return `${(n / 1024 / 1024).toFixed(1)} MB`;
   return `${(n / 1024 ** 3).toFixed(2)} GB`;
 }
+
+// 手机底栏的图标（线条风格，跟 iPhone 的“照片”一样）
+const ICON_STAR =
+  '<svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M12 3.2l2.7 5.6 6.1.8-4.5 4.2 1.1 6.1L12 17l-5.4 2.9 1.1-6.1-4.5-4.2 6.1-.8z"/></svg>';
+const ICON_STAR_ON =
+  '<svg viewBox="0 0 24 24" width="26" height="26" fill="currentColor" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M12 3.2l2.7 5.6 6.1.8-4.5 4.2 1.1 6.1L12 17l-5.4 2.9 1.1-6.1-4.5-4.2 6.1-.8z"/></svg>';
+const ICON_INFO =
+  '<svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="9.2"/><path d="M12 11v6"/><circle cx="12" cy="7.6" r="0.6" fill="currentColor"/></svg>';
