@@ -117,6 +117,13 @@ def main():
         scores["苹果美学"] = az
         scores["苹果美学 + 人脸"] = az + fz
         scores["通用 + 苹果 + 人脸"] = l14 + az + fz
+    v25 = npz.with_suffix(".v25.json")
+    if v25.exists():
+        vs = json.loads(v25.read_text())
+        vz = z([vs[nm] for nm in names])
+        scores["美学 v2.5"] = vz
+        scores["v2.5 + 通用"] = vz + l14
+        scores["v2.5 + 人脸"] = vz + fz
     if has_face.any():
         only = np.where(has_face, fz, -9)
         scores["只看人脸（有脸的）"] = only

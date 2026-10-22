@@ -4,3 +4,4 @@ pillow
 pillow-heif
 numpy
 pyobjc-framework-Vision; sys_platform == 'darwin'
+aesthetic-predictor-v2-5
