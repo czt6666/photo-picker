@@ -1,3 +1,32 @@
+/* 中文字形：明确指到苹方（没有就冬青黑体）。
+   Mac 上的 Chrome 遇到系统字体（-apple-system）里没有的中文时，本该自动换成苹方，
+   但有的版本只对粗体换成功，常规字重画成了带问号的方框。这里用 unicode-range 只接管中文和全角符号，
+   英文数字仍走系统字体；Windows / 手机上没有这些本地字体，这条规则自动跳过。 */
+@font-face {
+  font-family: 'PP CJK';
+  font-weight: 400;
+  src: local('PingFangSC-Regular'), local('PingFang SC Regular'), local('HiraginoSansGB-W3'), local('Hiragino Sans GB W3');
+  unicode-range: U+2E80-2FDF, U+3000-303F, U+3040-30FF, U+3100-312F, U+31C0-31EF, U+3400-4DBF, U+4E00-9FFF, U+F900-FAFF, U+FE30-FE4F, U+FF00-FFEF;
+}
+@font-face {
+  font-family: 'PP CJK';
+  font-weight: 500;
+  src: local('PingFangSC-Medium'), local('PingFang SC Medium'), local('HiraginoSansGB-W3'), local('Hiragino Sans GB W3');
+  unicode-range: U+2E80-2FDF, U+3000-303F, U+3040-30FF, U+3100-312F, U+31C0-31EF, U+3400-4DBF, U+4E00-9FFF, U+F900-FAFF, U+FE30-FE4F, U+FF00-FFEF;
+}
+@font-face {
+  font-family: 'PP CJK';
+  font-weight: 600;
+  src: local('PingFangSC-Semibold'), local('PingFang SC Semibold'), local('HiraginoSansGB-W6'), local('Hiragino Sans GB W6');
+  unicode-range: U+2E80-2FDF, U+3000-303F, U+3040-30FF, U+3100-312F, U+31C0-31EF, U+3400-4DBF, U+4E00-9FFF, U+F900-FAFF, U+FE30-FE4F, U+FF00-FFEF;
+}
+@font-face {
+  font-family: 'PP CJK';
+  font-weight: 700;
+  src: local('PingFangSC-Semibold'), local('PingFang SC Semibold'), local('HiraginoSansGB-W6'), local('Hiragino Sans GB W6');
+  unicode-range: U+2E80-2FDF, U+3000-303F, U+3040-30FF, U+3100-312F, U+31C0-31EF, U+3400-4DBF, U+4E00-9FFF, U+F900-FAFF, U+FE30-FE4F, U+FF00-FFEF;
+}
+
 :root {
   --bg: #1b1c1f;
   --panel: #232529;
@@ -13,7 +42,7 @@
   --thumb-h: 128px;
   --sidebar-w: 250px;
   color-scheme: dark;
-  font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino Sans GB', 'Segoe UI', 'Microsoft YaHei UI', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif;
+  font-family: 'PP CJK', -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino Sans GB', 'Segoe UI', 'Microsoft YaHei UI', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif;
   font-size: 13px;
 }
 
