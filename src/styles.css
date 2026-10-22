@@ -565,7 +565,14 @@ body.drop-target .content::after {
   z-index: 10;
   display: flex;
   flex-direction: column;
-  background: #0e0e10;
+  background: rgba(14, 14, 16, var(--v-bg, 1));
+  animation: viewer-in 0.22s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+@keyframes viewer-in {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
 }
 .v-top {
   display: flex;
@@ -1147,8 +1154,10 @@ body.touch .by {
     border-right: none;
     padding: 0;
   }
-  .search {
-    width: 110px;
+  /* 手机上地方小：搜索框收起来，分享只留图标，标题不被挤成省略号 */
+  .search,
+  .btn.share .label {
+    display: none;
   }
   #btn-help,
   #btn-workdir,
@@ -1198,4 +1207,200 @@ body.touch .by {
   .v-strip {
     padding-bottom: env(safe-area-inset-bottom);
   }
+}
+
+/* ---------- 上传进度面板 ---------- */
+
+.upload-panel {
+  position: fixed;
+  right: 16px;
+  bottom: 52px;
+  z-index: 18;
+  width: 300px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+  opacity: 0;
+  transform: translateY(16px);
+  pointer-events: none;
+  transition: opacity 0.2s, transform 0.25s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.upload-panel.show {
+  opacity: 1;
+  transform: none;
+  pointer-events: auto;
+}
+.up-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.up-title {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.up-stop {
+  padding: 2px 10px;
+}
+.up-text {
+  margin-top: 6px;
+  font-size: 12px;
+}
+/* 还不知道总数时（正在准备）：进度条来回走 */
+.upload-panel.indeterminate .fill {
+  width: 35% !important;
+  animation: indeterminate 1.1s ease-in-out infinite;
+}
+@keyframes indeterminate {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(290%);
+  }
+}
+/* 按钮上的转圈 */
+.btn.loading::before {
+  content: '';
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  margin-right: 6px;
+  vertical-align: -1px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+@media (max-width: 760px) {
+  .upload-panel {
+    left: 12px;
+    right: 12px;
+    width: auto;
+    bottom: calc(56px + env(safe-area-inset-bottom));
+  }
+}
+
+/* ---------- 手机：学 iPhone 的“照片” ---------- */
+
+/* 方格铺满：正方形、裁切填满、细缝，不要相框 */
+.grid.compact .cell {
+  border-radius: 0;
+}
+.grid.compact .cell::before {
+  inset: 0;
+  width: auto;
+  height: auto;
+  border-radius: 0;
+}
+.grid.compact .frame {
+  width: 100%;
+  height: 100%;
+}
+.grid.compact .thumb {
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  max-height: none;
+  object-fit: cover;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  transition: opacity 0.2s;
+}
+.grid.compact .cell.selected .thumb {
+  opacity: 0.6;
+}
+.grid.compact .cell.focused {
+  box-shadow: none;
+}
+.grid.compact .cell:active .thumb {
+  transform: scale(0.97);
+  transition: transform 0.1s;
+}
+.grid.compact .raw-tag {
+  top: 4px;
+  right: 4px;
+}
+.grid {
+  touch-action: pan-x pan-y;
+}
+
+/* 看大图：轻点一下藏起工具栏，只剩照片 */
+.v-top,
+.v-strip,
+.v-info {
+  transition: opacity 0.2s, transform 0.25s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.viewer.bare .v-top {
+  opacity: 0;
+  transform: translateY(-100%);
+  pointer-events: none;
+}
+.viewer.bare .v-strip,
+.viewer.bare .v-info {
+  opacity: 0;
+  transform: translateY(100%);
+  pointer-events: none;
+}
+.viewer.bare .v-star {
+  opacity: 0;
+  pointer-events: none;
+}
+@media (max-width: 760px) {
+  .v-top {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 3;
+    background: linear-gradient(rgba(14, 14, 16, 0.9), rgba(14, 14, 16, 0.6));
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+  }
+  .v-rate {
+    display: none;
+  }
+  /* 星标挪到底部正中，大拇指够得着 */
+  .v-star {
+    position: fixed;
+    left: 50%;
+    bottom: calc(86px + env(safe-area-inset-bottom));
+    z-index: 4;
+    transform: translateX(-50%);
+    padding: 10px 22px;
+    font-size: 16px;
+    border-radius: 999px;
+    background: rgba(30, 31, 35, 0.85);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    transition: opacity 0.2s;
+  }
+  .v-strip {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 3;
+    background: rgba(14, 14, 16, 0.75);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+  }
+  .statusbar #btn-star {
+    padding: 6px 16px;
+    border-radius: 999px;
+  }
+}
+
+/* 手机方格：没加星的不显示星星按钮（干净，像“照片”），加了星的显示金星 */
+.grid.compact .cell:not(.starred) .badge {
+  opacity: 0;
+  pointer-events: none;
 }

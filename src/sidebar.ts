@@ -116,7 +116,7 @@ export class Sidebar {
     } else {
       html += `
         <div class="sb-head">${t('工作目录')}</div>
-        <div class="sb-workdir"><span class="sb-name">${t('选择工作目录…')}</span></div>`;
+        <div class="sb-workdir"><span class="sb-name">${t('选择工作目录')}</span></div>`;
     }
     this.top.innerHTML = html;
     if (this.filterWorkdir !== wd) {

@@ -48,6 +48,8 @@ export const api = {
     const locals = paths.filter((p) => !isRemotePath(p));
     return locals.length && isTauri ? invoke<void>('prefetch_thumbs', { paths: locals }) : Promise.resolve();
   },
+  /** 要共享成远程相册的文件夹：连同子文件夹的所有照片（不切换工作目录） */
+  shareSource: (path: string) => local<{ folder: string; photo: Photo }[]>('share_source', { path }),
   /** 桌面版把本地照片压成预览（JPEG 字节），上传到远程相册用 */
   renderPreview: (path: string, maxPx: number) => local<ArrayBuffer>('render_preview', { path, maxPx }),
   exportPhotos: async (request: ExportRequest): Promise<ExportResult> => {

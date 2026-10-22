@@ -70,7 +70,7 @@ const sidebar = new Sidebar($('sidebar'), {
     contextMenu(x, y, [
       { label: REVEAL_LABEL, action: () => void revealItemInDir(path).catch(() => {}) },
       { label: t('重新扫描'), action: () => void rescan() },
-      { label: t('共享为远程相册…'), action: () => createRemote(path) },
+      { label: t('共享为远程相册'), action: () => createRemote(path) },
     ]);
   },
   workdirMenu: (x, y) => void showWorkdirMenu(x, y),
@@ -90,7 +90,7 @@ function setLibrary(lib: Library): void {
     workdirBtn.textContent = `☁ ${a.name} ▾`;
     workdirBtn.title = t('远程相册 · 点击切换');
   } else {
-    workdirBtn.textContent = wd ? `📁 ${baseName(wd)} ▾` : isWeb ? t('☁ 打开远程相册…') : t('📁 选择工作目录…');
+    workdirBtn.textContent = wd ? `📁 ${baseName(wd)} ▾` : isWeb ? t('☁ 打开远程相册') : t('📁 选择工作目录');
     workdirBtn.title = wd ? `${t('{path}\n点击切换', { path: wd })}（${modKey('O')}）` : `${t('选择照片文件夹')}（${modKey('O')}）`;
   }
   shareBtn.hidden = !a;
@@ -235,18 +235,18 @@ function renderEmpty(): void {
       <div class="big">☁</div>
       <h2>${t('PhotoPicker 网页版')}</h2>
       <p class="dim">${t('打开别人发来的远程相册链接，或者把自己的照片传上来，发链接给别人一起挑。')}</p>
-      <div class="row center"><button class="btn primary" id="empty-connect">${t('连接远程相册…')}</button>
-      <button class="btn" id="empty-create">${t('创建远程相册…')}</button></div></div>`;
+      <div class="row center"><button class="btn primary" id="empty-connect">${t('连接远程相册')}</button>
+      <button class="btn" id="empty-create">${t('创建远程相册')}</button></div></div>`;
   } else if (!store.library.workdir) {
     html = `<div class="empty-card">
       <div class="big">📁</div>
       <h2>${t('选择一个照片文件夹')}</h2>
       <p class="dim">${t('子文件夹会作为相册列在左侧，也可以把文件夹直接拖进来。')}</p>
-      <button class="btn primary" id="empty-add">${t('选择文件夹…')}</button></div>`;
+      <button class="btn primary" id="empty-add">${t('选择文件夹')}</button></div>`;
   } else if (store.library.workdir && !store.library.folders.length && store.view.kind === 'none') {
     html = `<div class="empty-card"><h2>${t('这里没有找到照片')}</h2>
       <p class="dim">${esc(store.library.workdir)}</p>
-      <button class="btn primary" id="empty-add">${t('换一个文件夹…')}</button></div>`;
+      <button class="btn primary" id="empty-add">${t('换一个文件夹')}</button></div>`;
   } else if (store.view.kind === 'none') {
     html = `<div class="empty-card"><p class="dim">${t('从左侧选择一个相册')}</p></div>`;
   } else if (!store.visible.length) {
@@ -483,7 +483,7 @@ async function showWorkdirMenu(x: number, y: number): Promise<void> {
   const active = remote.active ? remote.get(remote.active) : undefined;
   const remotes = remote.albums.filter((a) => a.code !== remote.active);
   const items: MenuItem[] = [];
-  if (isTauri) items.push({ label: t('选择文件夹…'), detail: modKey('O'), action: () => void chooseWorkdir() });
+  if (isTauri) items.push({ label: t('打开文件夹'), detail: modKey('O'), action: () => void chooseWorkdir() });
   if (active) items.push(...remoteItems(active));
   else if (workdir) {
     items.push(
@@ -493,8 +493,8 @@ async function showWorkdirMenu(x: number, y: number): Promise<void> {
   }
   items.push(
     { separator: true, label: t('远程相册'), action: () => {} },
-    { label: t('连接远程相册…'), action: () => showConnect((a) => void openRemote(a.code)) },
-    { label: t('创建远程相册…'), detail: isTauri && !active && workdir ? baseName(workdir) : '', action: () => void createRemote(null) },
+    { label: t('连接远程相册'), action: () => showConnect((a) => void openRemote(a.code)) },
+    { label: t('创建远程相册'), action: () => void createRemote(null) },
     ...remotes.map((a) => ({ label: `☁ ${a.name}`, detail: t('{n} 张', { n: a.count }), action: () => void openRemote(a.code) })),
   );
   if (others.length) {
@@ -574,6 +574,45 @@ zoom.addEventListener('input', () => {
   grid.setCellSize(Number(zoom.value));
   prefs.set('thumbSize', Number(zoom.value));
 });
+
+// 手机：像“照片”App 一样方格铺满屏幕，两指捏合改每行几张（2～6）
+const phone = matchMedia('(max-width: 760px)');
+const applyCompact = () => grid.setCompact(isTouch && phone.matches ? prefs.get('touchCols', 3) : null);
+applyCompact();
+phone.addEventListener('change', applyCompact);
+{
+  const pts = new Map<number, { x: number; y: number }>();
+  let base = 0;
+  const dist = () => {
+    const [a, b] = [...pts.values()];
+    return Math.hypot(a.x - b.x, a.y - b.y);
+  };
+  gridEl.addEventListener('pointerdown', (e) => {
+    if (e.pointerType !== 'touch') return;
+    pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pts.size === 2) base = dist();
+  });
+  gridEl.addEventListener('pointermove', (e) => {
+    if (!pts.has(e.pointerId)) return;
+    pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    const cols = grid.columns;
+    if (pts.size !== 2 || !cols || !base) return;
+    const r = dist() / base;
+    // 张开 = 放大 = 每行少一张；捏拢 = 每行多一张
+    const next = r > 1.3 ? cols - 1 : r < 0.77 ? cols + 1 : cols;
+    if (next !== cols && next >= 2 && next <= 6) {
+      prefs.set('touchCols', next);
+      grid.setCompact(next);
+      base = dist();
+    }
+  });
+  const up = (e: PointerEvent) => {
+    pts.delete(e.pointerId);
+    if (pts.size < 2) base = 0;
+  };
+  gridEl.addEventListener('pointerup', up);
+  gridEl.addEventListener('pointercancel', up);
+}
 
 // 触控板捏合（webview 里是带 ctrlKey 的滚轮事件）或 ⌘/Ctrl+滚轮：调整缩略图大小
 let pinchAcc = 0;
@@ -675,7 +714,7 @@ gridEl.addEventListener('contextmenu', (e) => {
     { label: allStarred ? t('取消星标') : t('加星标'), action: () => void toggleStar(targets) },
   ];
   if (isTauri && !isRemotePath(p.path)) items.push({ label: REVEAL_LABEL, action: () => void revealItemInDir(p.path).catch(() => {}) });
-  if (isTauri) items.push({ label: t('导出…'), action: () => openExportDialog() });
+  if (isTauri) items.push({ label: t('导出'), action: () => openExportDialog() });
   contextMenu(e.clientX, e.clientY, items);
 });
 
@@ -714,12 +753,13 @@ if (isTauri) void getCurrentWebview()
 // 远程相册
 // ---------------------------------------------------------------------------
 
-const progress = (text: string) => (thumbsEl.textContent = text);
+/** 上传进度在上传面板里，这里不用再显示 */
+const progress = () => {};
 
-/** 创建远程相册。桌面版默认把当前本地工作目录整个共享出去；右键某个相册就只共享它 */
+/** 创建远程相册：先选要共享的文件夹（默认停在当前工作目录；右键某个相册就停在它） */
 async function createRemote(sourceDir: string | null): Promise<void> {
   if (isTauri && !sourceDir) sourceDir = (await api.localLibrary().catch(() => null))?.workdir ?? null;
-  showCreate(sourceDir, (a) => void openRemote(a.code), progress);
+  await showCreate(sourceDir, (a) => void openRemote(a.code), progress);
 }
 
 /** 把远程相册当工作目录打开 */
@@ -755,15 +795,15 @@ function remoteItems(a: RemoteAlbum): MenuItem[] {
   const code = a.code;
   const owner = !!a.ownerToken;
   return [
-    { label: t('分享…'), action: () => showShare(a) },
+    { label: t('分享'), action: () => showShare(a) },
     { label: t('刷新'), action: () => void reloadRemote() },
     ...(owner
       ? [
           uploadingCode() === code
             ? { label: t('停止上传'), action: () => stopUpload() }
-            : { label: t('继续上传…'), detail: a.sourceDir ? baseName(a.sourceDir) : '', action: () => void continueUpload(a, progress) },
+            : { label: t('继续上传'), detail: a.sourceDir ? baseName(a.sourceDir) : '', action: () => void continueUpload(a, progress) },
           {
-            label: t('改名…'),
+            label: t('改名'),
             action: async () => {
               const name = await promptBox(t('相册名'), a.name);
               if (!name) return;
@@ -782,7 +822,7 @@ function remoteItems(a: RemoteAlbum): MenuItem[] {
     ...(owner
       ? [
           {
-            label: t('删除远程相册…'),
+            label: t('删除远程相册'),
             action: async () => {
               if (!(await confirmBox(t('删除远程相册「{name}」？', { name: a.name }), t('服务器上的预览和所有人的星标都会删掉，你电脑上的原图不受影响。'), t('删除')))) return;
               try {

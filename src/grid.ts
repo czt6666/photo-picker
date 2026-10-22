@@ -45,6 +45,8 @@ export class Grid {
   private colW = 0;
   private rowH = 0;
   private layout = new GridLayout([], { cols: 1, rowH: 0, gap: GAP, pad: PAD, headH: HEAD_H, headFirst: false });
+  /** 手机上像“照片”App 那样：固定列数、正方形格子铺满、缝很细。null = 平常的相框样式 */
+  private compactCols: number | null = null;
   private cells = new Map<number, HTMLElement>();
   /** 已经放到页面上的分界线，按段的序号 */
   private heads = new Map<number, HTMLElement>();
@@ -90,8 +92,29 @@ export class Grid {
     });
   }
 
+  private get pad(): number {
+    return this.compactCols ? 0 : PAD;
+  }
+
+  private get gap(): number {
+    return this.compactCols ? 2 : GAP;
+  }
+
   private get cellH(): number {
-    return Math.round(this.size * CELL_ASPECT);
+    return this.compactCols ? Math.floor(this.colW - this.gap) : Math.round(this.size * CELL_ASPECT);
+  }
+
+  get columns(): number | null {
+    return this.compactCols;
+  }
+
+  /** 切到 / 退出手机的铺满样式（cols = 每行几张） */
+  setCompact(cols: number | null): void {
+    if (cols === this.compactCols) return;
+    const anchor = this.firstVisibleIndex();
+    this.compactCols = cols;
+    this.el.classList.toggle('compact', !!cols);
+    this.relayout(anchor);
   }
 
   get cellSize(): number {
@@ -142,9 +165,9 @@ export class Grid {
       this.el.scrollTop = top - (viewH - this.rowH) / 2;
     } else if (top < this.el.scrollTop) {
       // 回到相册的第一行时把上面的分界线也露出来
-      this.el.scrollTop = top - PAD - (p.row === 0 ? p.band.head : 0);
+      this.el.scrollTop = top - this.pad - (p.row === 0 ? p.band.head : 0);
     } else if (top + this.rowH > this.el.scrollTop + viewH) {
-      this.el.scrollTop = top + this.rowH - viewH + PAD;
+      this.el.scrollTop = top + this.rowH - viewH + this.pad;
     }
     this.schedule();
   }
@@ -245,17 +268,23 @@ export class Grid {
   }
 
   private relayout(anchorIndex?: number, keepScroll = false): void {
-    const width = this.el.clientWidth - PAD * 2;
+    const width = this.el.clientWidth - this.pad * 2;
     if (width <= 0) return;
     const anchor = anchorIndex ?? this.firstVisibleIndex();
-    this.cols = Math.max(1, Math.floor((width + GAP) / (this.size + GAP)));
-    this.colW = width / this.cols;
-    this.rowH = this.cellH + GAP;
+    if (this.compactCols) {
+      // 铺满：每格宽 = (总宽 + 缝) / 列数，格子本身再减掉一条缝
+      this.cols = this.compactCols;
+      this.colW = (width + this.gap) / this.cols;
+    } else {
+      this.cols = Math.max(1, Math.floor((width + GAP) / (this.size + GAP)));
+      this.colW = width / this.cols;
+    }
+    this.rowH = this.cellH + this.gap;
     this.layout = new GridLayout(store.sections, {
       cols: this.cols,
       rowH: this.rowH,
-      gap: GAP,
-      pad: PAD,
+      gap: this.gap,
+      pad: this.pad,
       headH: HEAD_H,
       // 看单个相册时顶栏已经写着相册名，第一段上面不用再放；星标汇总里每个相册都标出来
       headFirst: store.view.kind !== 'folder',
@@ -325,7 +354,7 @@ export class Grid {
 
     // 视口最上面是哪个相册；滚到最底时算最后一个（它可能不够高，永远到不了最上面）
     const atEnd = top > 0 && top + viewH >= L.height - 1;
-    const cur = atEnd ? L.bands[L.bands.length - 1] : L.bandAt(top + PAD);
+    const cur = atEnd ? L.bands[L.bands.length - 1] : L.bandAt(top + this.pad);
     if (cur && cur.dir !== this.curDir) {
       this.curDir = cur.dir;
       this.cb.sectionChanged(cur.dir);
@@ -348,8 +377,8 @@ export class Grid {
 
   private place(c: HTMLElement, i: number, p: Photo): void {
     const at = this.layout.pos(i);
-    c.style.transform = `translate(${PAD + (at?.col ?? 0) * this.colW}px, ${at?.y ?? 0}px)`;
-    c.style.width = `${this.colW}px`;
+    c.style.transform = `translate(${this.pad + (at?.col ?? 0) * this.colW}px, ${at?.y ?? 0}px)`;
+    c.style.width = `${this.compactCols ? this.colW - this.gap : this.colW}px`;
     c.style.height = `${this.cellH}px`;
     c.style.visibility = '';
     c.dataset.i = String(i);

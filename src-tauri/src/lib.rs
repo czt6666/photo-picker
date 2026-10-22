@@ -451,6 +451,35 @@ async fn set_star(paths: Vec<String>, starred: bool, state: AppStateRef<'_>) -> 
     .await
 }
 
+/// 要共享成远程相册的一张照片：folder 是相对共享文件夹的路径（“2024/旅行”，根目录是 ""）
+#[derive(Serialize)]
+struct SharedPhoto {
+    folder: String,
+    photo: Photo,
+}
+
+/// 共享为远程相册：列出一个文件夹（含所有子文件夹）里的照片，不切换工作目录。
+/// 文件夹是用户在系统对话框里亲手选的，顺便放行它，后面压预览时才读得到。
+#[tauri::command]
+async fn share_source(path: String, state: AppStateRef<'_>) -> Result<Vec<SharedPhoto>, String> {
+    let st = state.inner().clone();
+    blocking(move || {
+        let dir = PathBuf::from(&path);
+        if !dir.is_absolute() || !dir.is_dir() {
+            return Err(format!("文件夹不存在：{path}"));
+        }
+        st.images.add_root(&dir);
+        let mut out = vec![];
+        for f in scan::scan_root(&dir, &st.stars) {
+            for photo in scan::list_folder(Path::new(&f.path), &st.stars).map_err(|e| e.to_string())? {
+                out.push(SharedPhoto { folder: f.rel.clone(), photo });
+            }
+        }
+        Ok(out)
+    })
+    .await
+}
+
 /// 把本地照片压成长边 max_px 的 JPEG（已按 EXIF 转正），上传到远程相册用。
 /// 走 IPC 直接回传字节（ipc::Response 不经 JSON，几百 KB 也很快）。
 #[tauri::command]
@@ -677,6 +706,7 @@ pub fn run() {
             forget_workdir,
             list_folder,
             list_starred,
+            share_source,
             set_star,
             set_rating,
             match_pick_list,

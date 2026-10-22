@@ -120,7 +120,38 @@ export function stopUpload(): void {
   if (uploading) uploading.cancel = true;
 }
 
-/** 后台上传；进度报给 onProgress（显示在状态栏），完成后提示 */
+/**
+ * 上传进度面板：右下角（手机上是底部）一张小卡片，进度条 + 张数 + 停止。
+ * 上传在后台跑，看照片、加星都不耽误。
+ */
+const panel = {
+  el: null as HTMLElement | null,
+  show(title: string, onStop: () => void): void {
+    if (!this.el) {
+      this.el = document.createElement('div');
+      this.el.className = 'upload-panel';
+      document.getElementById('app')!.appendChild(this.el);
+    }
+    this.el.innerHTML = `<div class="up-head"><span class="up-title"></span><button class="btn up-stop">${t('停止')}</button></div>
+      <div class="bar"><div class="fill"></div></div><div class="up-text dim"></div>`;
+    this.el.querySelector('.up-title')!.textContent = title;
+    this.el.querySelector('.up-stop')!.addEventListener('click', onStop);
+    this.el.classList.add('show');
+    this.update(0, 0, t('正在准备'));
+  },
+  update(done: number, total: number, text: string): void {
+    if (!this.el) return;
+    const fill = this.el.querySelector<HTMLElement>('.fill')!;
+    fill.style.width = total ? `${Math.round((done / total) * 100)}%` : '0';
+    this.el.classList.toggle('indeterminate', !total);
+    this.el.querySelector('.up-text')!.textContent = text;
+  },
+  hide(): void {
+    this.el?.classList.remove('show');
+  },
+};
+
+/** 后台上传，进度显示在上传面板里，完成后提示 */
 async function runUpload(a: RemoteAlbum, jobs: UploadJob[], onProgress: (text: string) => void): Promise<void> {
   if (uploading) {
     toast(t('正在上传，等这批传完'), 'warn');
@@ -128,13 +159,16 @@ async function runUpload(a: RemoteAlbum, jobs: UploadJob[], onProgress: (text: s
   }
   const job = { code: a.code, cancel: false };
   uploading = job;
-  const text = (p: UploadProgress) => {
-    let s = t('上传到「{name}」{done} / {total}', { name: a.name, done: p.done + p.failed.length, total: p.total });
+  panel.show(t('上传到「{name}」', { name: a.name }), () => (job.cancel = true));
+  const report = (p: UploadProgress) => {
+    const done = p.done + p.failed.length;
+    let s = t('{done} / {total} 张', { done, total: p.total });
     if (p.failed.length) s += t('，{n} 张失败', { n: p.failed.length });
-    return s;
+    panel.update(done, p.total, s);
+    onProgress(s);
   };
   try {
-    const r = await uploadJobs(a.code, jobs, (p) => onProgress(text(p)), () => job.cancel);
+    const r = await uploadJobs(a.code, jobs, report, () => job.cancel);
     onProgress('');
     if (job.cancel) toast(t('已停止，传了 {n} 张。再传一次会接着传。', { n: r.done }), 'warn', 5000);
     else if (r.failed.length) {
@@ -142,8 +176,11 @@ async function runUpload(a: RemoteAlbum, jobs: UploadJob[], onProgress: (text: s
       toast(t('传完了，{n} 张失败：{names}', { n: r.failed.length, names }), 'error', 8000);
     } else if (r.total) toast(t('传完了：{n} 张', { n: r.done }));
     else toast(t('这些照片都已经传过了'));
+  } catch (e) {
+    toast(String(e), 'error');
   } finally {
     uploading = null;
+    panel.hide();
   }
 }
 
@@ -164,44 +201,58 @@ function filePicker(dir: boolean, onPick: (files: SourceFile[]) => void): void {
   input.click();
 }
 
-/**
- * 桌面版要共享的本地照片。dir 是当前本地工作目录 → 整个工作目录（子文件夹原样带上）；
- * 否则就是这一个文件夹。folder 是相对 dir 的路径，导出时拼回原图。
- */
+/** 桌面版要共享的本地照片：这个文件夹连同所有子文件夹，folder 是相对它的路径，导出时拼回原图 */
 async function localPhotos(dir: string): Promise<LocalItem[]> {
   await store.starsSettled();
-  const lib = await api.localLibrary();
-  const folders = lib.workdir === dir ? lib.folders : [{ path: dir, rel: '' }];
-  const out: LocalItem[] = [];
-  for (const f of folders) for (const photo of await api.listFolder(f.path)) out.push({ photo, folder: f.rel.replace(/\\/g, '/') });
-  return out;
+  return api.shareSource(dir);
+}
+
+/** 系统的选文件夹对话框（像 VS Code 的“打开文件夹”），默认停在 defaultPath */
+async function pickDir(defaultPath: string | null): Promise<string | null> {
+  const picked = await openDialog({ directory: true, multiple: false, title: t('选择要共享的文件夹'), defaultPath: defaultPath ?? undefined });
+  return typeof picked === 'string' ? picked : null;
 }
 
 const dirName = (d: string) => d.split(/[\\/]/).filter(Boolean).pop() ?? d;
 
 /**
- * 创建远程相册。
- * 桌面版：把本地工作目录（或右键的那个相册）共享出去，记住原图文件夹，导出时直接对回原图。
- * 网页版：从电脑里选文件夹/照片，在浏览器里压缩后上传。
+ * 创建远程相册。和 VS Code 打开文件夹一样，先选目录：
+ * 桌面版弹系统对话框选一个文件夹（默认停在当前工作目录），子文件夹原样带上，记住它，导出时直接对回原图；
+ * 网页版从电脑里选文件夹/照片，在浏览器里压缩。
  * 只上传缩小的 JPEG 预览，RAW 和原图都不传。
  */
-export function showCreate(sourceDir: string | null, onCreated: (a: RemoteAlbum) => void, onProgress: (text: string) => void): void {
+export async function showCreate(defaultDir: string | null, onCreated: (a: RemoteAlbum) => void, onProgress: (text: string) => void): Promise<void> {
   let files: SourceFile[] = [];
-  if (isTauri && !sourceDir) return void toast(t('先选一个本地工作目录'), 'warn');
+  let dir: string | null = null;
+  if (isTauri) {
+    dir = await pickDir(defaultDir);
+    if (!dir) return;
+  }
   const { el, close } = modal(`<h2>${t('创建远程相册')}</h2>
     <p class="dim">${t('拿到链接的人都能打开、一起加星标。只上传缩小的预览图，RAW 和原图都留在你电脑上。')}</p>
     <div class="field"><div class="label">${t('照片')}</div>
       ${
         isTauri
-          ? `<div class="dim">${esc(sourceDir!)}</div>`
-          : `<div class="row"><button class="btn r-dir">${t('选择文件夹…')}</button><button class="btn r-files">${t('选择照片…')}</button><span class="dim r-count"></span></div>`
+          ? `<div class="row"><span class="r-src"></span><button class="btn r-pick">${t('更改')}</button></div>`
+          : `<div class="row"><button class="btn r-dir">${t('选择文件夹')}</button><button class="btn r-files">${t('选择照片')}</button><span class="dim r-count"></span></div>`
       }
     </div>
     <div class="field"><div class="label">${t('相册名')}</div><input class="input wide r-title" maxlength="40"></div>
     ${nameField()}
     <div class="actions"><button class="btn cancel">${t('取消')}</button><button class="btn primary ok">${t('创建并上传')}</button></div>`);
   const title = el.querySelector<HTMLInputElement>('.r-title')!;
-  if (sourceDir) title.value = dirName(sourceDir);
+  const showDir = () => {
+    el.querySelector('.r-src')!.textContent = dir!;
+    title.value = dirName(dir!);
+  };
+  if (dir) showDir();
+  el.querySelector('.r-pick')?.addEventListener('click', async () => {
+    const d = await pickDir(dir);
+    if (d) {
+      dir = d;
+      showDir();
+    }
+  });
   const picked = (f: SourceFile[]) => {
     files = f;
     el.querySelector('.r-count')!.textContent = t('已选 {n} 个文件', { n: f.length });
@@ -210,35 +261,46 @@ export function showCreate(sourceDir: string | null, onCreated: (a: RemoteAlbum)
   el.querySelector('.r-dir')?.addEventListener('click', () => filePicker(true, picked));
   el.querySelector('.r-files')?.addEventListener('click', () => filePicker(false, picked));
   el.querySelector('.cancel')!.addEventListener('click', close);
+  const ok = el.querySelector<HTMLButtonElement>('.ok')!;
+  const busy = (on: boolean) => {
+    ok.disabled = on;
+    ok.classList.toggle('loading', on);
+    ok.textContent = on ? t('正在创建') : t('创建并上传');
+  };
 
   const create = async (password: string | null) => {
     if (isWeb && !files.length) return toast(t('请选择照片'), 'warn');
     if (!title.value.trim()) return title.focus();
     if (!takeName(el)) return;
-    let jobs: UploadJob[];
+    busy(true);
     try {
-      jobs = isTauri ? jobsFromLocal(await localPhotos(sourceDir!)) : jobsFromFiles(files);
-    } catch (e) {
-      return toast(String(e), 'error');
-    }
-    if (!jobs.length) return toast(t('没找到能用的照片'), 'warn');
-    let a: RemoteAlbum;
-    try {
-      a = await remote.create(title.value.trim(), password, sourceDir ?? undefined);
-    } catch (e) {
-      if (e instanceof RemoteError && e.status === 403) {
-        const pw = await askPassword();
-        if (pw !== null) return create(pw);
-        return;
+      let jobs: UploadJob[];
+      try {
+        jobs = isTauri ? jobsFromLocal(await localPhotos(dir!)) : jobsFromFiles(files);
+      } catch (e) {
+        return toast(String(e), 'error');
       }
-      return toast(e instanceof Error ? e.message : String(e), 'error', 5000);
+      if (!jobs.length) return toast(t('没找到能用的照片'), 'warn');
+      let a: RemoteAlbum;
+      try {
+        a = await remote.create(title.value.trim(), password, dir ?? undefined);
+      } catch (e) {
+        if (e instanceof RemoteError && e.status === 403) {
+          const pw = await askPassword();
+          if (pw !== null) return create(pw);
+          return;
+        }
+        return toast(e instanceof Error ? e.message : String(e), 'error', 5000);
+      }
+      close();
+      onCreated(a);
+      showShare(a);
+      void runUpload(a, jobs, onProgress);
+    } finally {
+      busy(false);
     }
-    close();
-    onCreated(a);
-    showShare(a);
-    void runUpload(a, jobs, onProgress);
   };
-  el.querySelector('.ok')!.addEventListener('click', () => void create(null));
+  ok.addEventListener('click', () => void create(null));
   title.focus();
 }
 
@@ -264,12 +326,8 @@ export function showShare(a: RemoteAlbum): void {
 /** 往自己建的远程相册里再传（新增的照片，或上次中断的） */
 export async function continueUpload(a: RemoteAlbum, onProgress: (text: string) => void): Promise<void> {
   if (isTauri) {
-    let dir = a.sourceDir ?? null;
-    if (!dir) {
-      const picked = await openDialog({ directory: true, multiple: false, title: t('选择要共享的相册文件夹') });
-      if (typeof picked !== 'string') return;
-      dir = picked;
-    }
+    const dir = a.sourceDir ?? (await pickDir(null));
+    if (!dir) return;
     try {
       await remote.fetch(a.code); // 先拿到已经传过的，好跳过
       await runUpload(a, jobsFromLocal(await localPhotos(dir)), onProgress);

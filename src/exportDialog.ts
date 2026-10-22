@@ -61,7 +61,7 @@ export function openExportDialog(): void {
         <div class="label">${t('导出到')}</div>
         <div class="row">
           <input class="input dest" readonly value="${esc(p.dest)}">
-          <button class="btn pick">${t('选择…')}</button>
+          <button class="btn pick">${t('选择')}</button>
         </div>
         <div class="row">
           <span class="dim">${t('子文件夹')}</span>

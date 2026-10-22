@@ -2,7 +2,7 @@
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, viewport-fit=cover" />
     <title>选片</title>
     <link rel="stylesheet" href="/src/styles.css" />
   </head>
@@ -11,10 +11,10 @@
       <header class="toolbar">
         <button id="btn-menu" class="btn icon tb-menu" title="相册">☰</button>
         <div class="tb-side">
-          <button id="btn-workdir" class="btn workdir">📁 选择工作目录…</button>
+          <button id="btn-workdir" class="btn workdir">📁 选择工作目录</button>
           <button id="btn-rescan" class="btn icon" title="重新扫描">⟳</button>
         </div>
-        <button id="btn-share" class="btn share" title="把链接发给别人一起挑" hidden>🔗 分享</button>
+        <button id="btn-share" class="btn share" title="把链接发给别人一起挑" hidden>🔗 <span class="label">分享</span></button>
         <div class="view-title" id="view-title"></div>
         <input id="search" class="search" type="search" placeholder="搜索文件名" autocomplete="off" spellcheck="false" />
         <button id="btn-settings" class="btn icon" title="设置">⚙</button>
@@ -43,7 +43,7 @@
           <input type="range" id="zoom" min="90" max="280" step="10" />
           <span class="dim big">◻</span>
         </label>
-        <button id="btn-export" class="btn primary">导出…</button>
+        <button id="btn-export" class="btn primary">导出</button>
       </footer>
 
       <div id="viewer" class="viewer" hidden>

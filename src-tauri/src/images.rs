@@ -58,6 +58,14 @@ impl ImageService {
         *self.roots.write() = roots.iter().map(PathBuf::from).collect();
     }
 
+    /// 额外放行一个目录（用户在对话框里亲手选的，比如要共享成远程相册的文件夹）。换工作目录时会被 set_roots 清掉。
+    pub fn add_root(&self, root: &Path) {
+        let mut roots = self.roots.write();
+        if !roots.iter().any(|r| root.starts_with(r)) {
+            roots.push(root.to_path_buf());
+        }
+    }
+
     /// 只允许访问图库根目录下的图片文件（协议 URL 理论上能被页面拼出任意路径，这里兜底）。
     pub fn allowed(&self, p: &Path) -> bool {
         p.is_absolute()

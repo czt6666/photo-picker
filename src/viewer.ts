@@ -166,6 +166,7 @@ export class Viewer {
     this.list = list.slice();
     this.isOpen = true;
     this.root.hidden = false;
+    this.root.classList.remove('bare');
     this.strip.setList(this.list);
     this.index = -1;
     this.wheel.reset();
@@ -663,28 +664,31 @@ export class Viewer {
   }
 
   // 鼠标：放大后拖动平移。
-  // 手指：没放大时左右滑 = 翻页；放大后单指拖 = 平移；双指捏 = 缩放；连点两下 = 1:1 / 适合。
-  // 每根按下的手指记在 touches 里，一根 = 拖/滑，两根 = 捏。
+  // 手指（学 iPhone 的“照片”）：没放大时照片跟着手指左右走，松手过半或甩一下就翻页；往下拖 = 缩小淡出、松手关闭；
+  // 放大后单指拖 = 平移；双指捏 = 缩放；连点两下 = 放大 / 还原；轻点一下 = 藏起 / 露出工具栏。
   private touches = new Map<number, { x: number; y: number }>();
-  private swipe: { x: number; y: number; t: number } | null = null;
+  /** 这次手指按下的起点；axis = 认定的方向（动了 10px 以后才定，定了就不改） */
+  private swipe: { x: number; y: number; t: number; axis: 'x' | 'y' | null } | null = null;
   private pinch: { d: number; scale: number } | null = null;
   private lastTap = 0;
+  private tapTimer = 0;
   private byTouch = false;
+  private sliding = false;
 
   private onPointerDown(e: PointerEvent): void {
     this.byTouch = e.pointerType === 'touch';
-    if ((e.target as HTMLElement).closest('.v-nav')) return;
+    if ((e.target as HTMLElement).closest('.v-nav') || this.sliding) return;
     if (e.pointerType === 'touch') {
       this.touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
       if (this.touches.size === 2) {
         const [a, b] = [...this.touches.values()];
         this.pinch = { d: Math.hypot(a.x - b.x, a.y - b.y), scale: this.currentScale() };
-        this.swipe = null;
+        this.cancelSwipe();
         this.drag = null;
         return;
       }
       if (this.touches.size > 2) return;
-      this.swipe = { x: e.clientX, y: e.clientY, t: performance.now() };
+      this.swipe = { x: e.clientX, y: e.clientY, t: performance.now(), axis: null };
     }
     if (e.button !== 0 || this.scale === null) return;
     this.drag = { x: e.clientX, y: e.clientY, px: this.panX, py: this.panY };
@@ -701,6 +705,24 @@ export class Viewer {
         this.zoomTo((this.pinch.scale * d) / Math.max(1, this.pinch.d), (a.x + b.x) / 2 - r.left, (a.y + b.y) / 2 - r.top);
         return;
       }
+      const sw = this.swipe;
+      if (sw && this.scale === null && !this.pinch) {
+        const dx = e.clientX - sw.x;
+        const dy = e.clientY - sw.y;
+        if (!sw.axis && Math.hypot(dx, dy) > 10) sw.axis = Math.abs(dx) > Math.abs(dy) ? 'x' : dy > 0 ? 'y' : null;
+        if (sw.axis === 'x') {
+          // 到头了还往外拉：只走三分之一，像拉橡皮筋
+          const edge = (dx > 0 && this.index === 0) || (dx < 0 && this.index === this.list.length - 1);
+          this.stage.style.transition = 'none';
+          this.stage.style.transform = `translateX(${edge ? dx / 3 : dx}px)`;
+        } else if (sw.axis === 'y') {
+          const k = Math.max(0, dy);
+          this.stage.style.transition = 'none';
+          this.stage.style.transform = `translate(${dx}px, ${k}px) scale(${Math.max(0.6, 1 - k / 800)})`;
+          this.root.style.setProperty('--v-bg', String(Math.max(0, 1 - k / 300)));
+        }
+        return;
+      }
     }
     if (!this.drag) return;
     this.panX = this.drag.px + (e.clientX - this.drag.x);
@@ -714,27 +736,88 @@ export class Viewer {
         // 松开一根手指后，剩下那根不接着当拖动/翻页用，免得画面跳
         if (this.touches.size === 0) this.pinch = null;
       } else if (this.swipe && this.isOpen) {
-        const dx = e.clientX - this.swipe.x;
-        const dy = e.clientY - this.swipe.y;
-        const quick = performance.now() - this.swipe.t < 600;
-        if (this.scale === null && quick && Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.5) {
-          this.step(dx < 0 ? 1 : -1);
+        const sw = this.swipe;
+        const dx = e.clientX - sw.x;
+        const dy = e.clientY - sw.y;
+        const dt = performance.now() - sw.t;
+        const w = this.stage.clientWidth;
+        if (sw.axis === 'x' && this.scale === null) {
+          const d = dx < 0 ? 1 : -1;
+          const fling = dt < 300 && Math.abs(dx) > 40;
+          const can = this.index + d >= 0 && this.index + d < this.list.length;
+          if (can && (fling || Math.abs(dx) > w / 2)) this.slideTo(d);
+          else this.springBack();
+        } else if (sw.axis === 'y' && this.scale === null) {
+          if (dy > 100 || (dt < 300 && dy > 50)) this.swipeClose();
+          else this.springBack();
         } else if (Math.abs(dx) < 10 && Math.abs(dy) < 10) {
-          const now = performance.now();
-          if (now - this.lastTap < 300) {
-            this.lastTap = 0;
-            const r = this.stage.getBoundingClientRect();
-            if (this.scale !== null || this.pendingZoom) this.fit();
-            else this.zoomTo(this.fitScale() * 2.5, e.clientX - r.left, e.clientY - r.top);
-          } else {
-            this.lastTap = now;
-          }
+          this.onTap(e);
         }
       }
       this.swipe = null;
     }
     this.drag = null;
     this.stage.classList.remove('dragging');
+  }
+
+  /** 轻点：等一下看是不是连点两下。单击 = 藏起 / 露出工具栏，双击 = 放大 / 还原 */
+  private onTap(e: PointerEvent): void {
+    const now = performance.now();
+    if (now - this.lastTap < 300) {
+      this.lastTap = 0;
+      clearTimeout(this.tapTimer);
+      const r = this.stage.getBoundingClientRect();
+      if (this.scale !== null || this.pendingZoom) this.fit();
+      else this.zoomTo(this.fitScale() * 2.5, e.clientX - r.left, e.clientY - r.top);
+      return;
+    }
+    this.lastTap = now;
+    clearTimeout(this.tapTimer);
+    this.tapTimer = window.setTimeout(() => this.root.classList.toggle('bare'), 260);
+  }
+
+  private cancelSwipe(): void {
+    if (this.swipe?.axis) this.springBack();
+    this.swipe = null;
+  }
+
+  /** 松手没过线：弹回原位 */
+  private springBack(): void {
+    this.stage.style.transition = 'transform 0.25s cubic-bezier(0.2, 0.8, 0.2, 1)';
+    this.stage.style.transform = '';
+    this.root.style.removeProperty('--v-bg');
+  }
+
+  /** 翻页动画：当前这张滑出去，下一张从另一边滑进来 */
+  private slideTo(d: number): void {
+    const w = this.stage.clientWidth;
+    this.sliding = true;
+    this.stage.style.transition = 'transform 0.18s ease-out';
+    this.stage.style.transform = `translateX(${-d * w}px)`;
+    window.setTimeout(() => {
+      this.step(d);
+      this.stage.style.transition = 'none';
+      this.stage.style.transform = `translateX(${d * w * 0.35}px)`;
+      void this.stage.offsetWidth;
+      this.stage.style.transition = 'transform 0.22s cubic-bezier(0.2, 0.8, 0.2, 1)';
+      this.stage.style.transform = '';
+      window.setTimeout(() => (this.sliding = false), 220);
+    }, 170);
+  }
+
+  /** 往下拖关掉：缩小淡出，然后回到网格 */
+  private swipeClose(): void {
+    this.stage.style.transition = 'transform 0.2s ease-in, opacity 0.2s ease-in';
+    this.stage.style.transform += ' scale(0.8)';
+    this.stage.style.opacity = '0';
+    this.root.style.setProperty('--v-bg', '0');
+    window.setTimeout(() => {
+      this.close();
+      this.stage.style.transition = 'none';
+      this.stage.style.transform = '';
+      this.stage.style.opacity = '';
+      this.root.style.removeProperty('--v-bg');
+    }, 200);
   }
 
   private async rate(n: number): Promise<void> {
@@ -747,6 +830,7 @@ export class Viewer {
   private async toggleStar(): Promise<void> {
     const p = this.current;
     if (!p) return;
+    if (this.byTouch) navigator.vibrate?.(10); // 安卓上轻震一下（iPhone 的网页没有震动）
     await this.cb.toggleStar([p]);
     this.refreshStar();
     this.starMark.classList.remove('pop');
