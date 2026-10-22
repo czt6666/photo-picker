@@ -167,7 +167,9 @@ SCORERS = {"l14": (L14, "aes_l14"), "v25": (V25, "aes_v25"), "topiq": (Topiq, "a
 
 def scan(root):
     return [p for p in sorted(root.rglob("*"))
-            if p.is_file() and p.suffix.lower() in EXTS and not any(x.startswith(".") for x in p.relative_to(root).parts)]
+            if p.is_file() and p.suffix.lower() in EXTS
+            # 跳过隐藏目录和 _ 开头的工作目录（比如剪视频时导出的 _剪辑工作/ 帧）
+            and not any(x.startswith((".", "_")) for x in p.relative_to(root).parts)]
 
 
 def select(feat, key, albums, ok, times, k, cap, allow):
