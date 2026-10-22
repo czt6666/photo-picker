@@ -1,4 +1,4 @@
-// 导出对话框：选范围（星标/选中/全部星标）→ 选目标文件夹 → 原图复制或缩小导出 → 进度 → 在访达 / 资源管理器中显示。
+// 导出对话框：选范围（星标/选中）→ 选目标文件夹 → 原图移动或复制 → 进度 → 在访达 / 资源管理器中显示。
 
 import { listen } from '@tauri-apps/api/event';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
@@ -19,6 +19,8 @@ interface ExportPrefs {
   quality: number;
   /** 同时导出同名 RAW（旧版保存的偏好里没有这个字段 → 默认开） */
   withRaw?: boolean;
+  /** 移动还是复制（默认移动：挑出来的照片挪进新文件夹，原处不再重复占空间） */
+  move?: boolean;
 }
 
 export function isExportOpen(): boolean {
@@ -31,7 +33,8 @@ export function closeExportDialog(): void {
   closeCurrent?.();
 }
 
-export function openExportDialog(): void {
+/** onMoved：移动了文件之后调用（主界面重新扫描，挪走的照片从原相册消失） */
+export function openExportDialog(onMoved?: () => void): void {
   const el = document.getElementById('export-dialog')!;
   const p = prefs.get<ExportPrefs>('export', { dest: '', mode: 'original', maxPx: 2048, quality: 90 });
   const workdirAtOpen = store.library.workdir;
@@ -67,6 +70,12 @@ export function openExportDialog(): void {
           <span class="dim">${t('子文件夹')}</span>
           <input class="input sub" placeholder="${t('可留空')}" value="${esc(viewName ? t('{name} 精选', { name: viewName }) : '')}">
         </div>
+      </div>
+      <div class="field">
+        <div class="label">${t('方式')}</div>
+        <label class="opt"><input type="radio" name="how" value="move" ${p.move === false ? '' : 'checked'}> ${t('移动')}
+          <span class="dim">${t('原位置不再保留')}</span></label>
+        <label class="opt"><input type="radio" name="how" value="copy" ${p.move === false ? 'checked' : ''}> ${t('复制')}</label>
       </div>
       <div class="field">
         <label class="opt"><input type="checkbox" class="with-raw" ${p.withRaw === false ? '' : 'checked'}>
@@ -132,8 +141,9 @@ export function openExportDialog(): void {
     if (!photos.length) return toast(t('没有可导出的照片'), 'warn');
 
     const withRaw = $<HTMLInputElement>('.with-raw').checked;
-    // 只导出原图（直接复制文件）；缩小导出的后端能力还在，界面上不再提供
-    const settings: ExportPrefs = { ...p, dest: dest.value, withRaw };
+    // 只导出原图（移动或复制文件）；缩小导出的后端能力还在，界面上不再提供
+    const move = el.querySelector<HTMLInputElement>('input[name=how]:checked')?.value !== 'copy';
+    const settings: ExportPrefs = { ...p, dest: dest.value, withRaw, move };
     prefs.set('export', settings);
 
     running = true;
@@ -158,7 +168,9 @@ export function openExportDialog(): void {
         maxPx: settings.maxPx,
         quality: settings.quality,
         includeCompanions: withRaw,
+        moveFiles: move,
       });
+      if (move && r.files > 0) onMoved?.();
       fill.style.width = '100%';
       const failed = r.failed.length
         ? t('，{n} 个失败：{list}', {
@@ -167,7 +179,9 @@ export function openExportDialog(): void {
           })
         : '';
       const extra = r.files > r.exported ? t('（{n} 个文件，含 RAW）', { n: r.files }) : '';
-      const head = t(r.cancelled ? '已停止，导出了 {n} 张' : '已导出 {n} 张', { n: r.exported });
+      const head = move
+        ? t(r.cancelled ? '已停止，移动了 {n} 张' : '已移动 {n} 张', { n: r.exported })
+        : t(r.cancelled ? '已停止，导出了 {n} 张' : '已导出 {n} 张', { n: r.exported });
       ptext.innerHTML = `${esc(head + extra + failed)}<br><span class="path">${esc(r.dest)}</span>`;
       const reveal = document.createElement('button');
       reveal.className = 'btn';

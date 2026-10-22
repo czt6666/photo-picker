@@ -85,6 +85,8 @@ export interface ExportRequest {
   quality: number;
   /** 同时导出同名的 RAW / xmp */
   includeCompanions: boolean;
+  /** 移动而不是复制 */
+  moveFiles?: boolean;
 }
 
 export interface ExportResult {

@@ -47,6 +47,9 @@ pub struct ExportRequest {
     /// 同时导出同名的 RAW / xmp 文件
     #[serde(default = "default_true")]
     pub include_companions: bool,
+    /// 移动而不是复制：原位置不再保留（只对原图导出有效）
+    #[serde(default)]
+    pub move_files: bool,
 }
 
 fn default_true() -> bool {
@@ -255,14 +258,16 @@ pub fn run_export(
                 let i = next.fetch_add(1, Ordering::SeqCst);
                 let Some(item) = plan.get(i) else { return };
                 let (src, target) = (&item.src, &item.target);
-                let r = if item.copy { copy_original(src, target) } else { resize_one(src, target, req.max_px, req.quality) };
+                let mv = req.move_files && item.copy;
+                let transfer = |a: &Path, b: &Path| if mv { move_original(a, b) } else { copy_original(a, b) };
+                let r = if item.copy { transfer(src, target) } else { resize_one(src, target, req.max_px, req.quality) };
                 match r {
                     Ok(()) => {
                         files.fetch_add(1, Ordering::SeqCst);
                         // 一张照片 = 主文件 + 全部伴侣都成功才算导出成功
                         let mut whole = true;
                         for (csrc, ctarget) in &item.companions {
-                            match copy_original(csrc, ctarget) {
+                            match transfer(csrc, ctarget) {
                                 Ok(()) => {
                                     files.fetch_add(1, Ordering::SeqCst);
                                 }
@@ -319,6 +324,19 @@ fn copy_original(src: &Path, target: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// 移动原文件。同一块磁盘上直接改名（瞬间完成，不占额外空间）；跨磁盘（比如导到 U 盘）改名会失败，
+/// 就先完整复制、确认成功后再删掉原文件。目标已存在同样报错，绝不覆盖。
+fn move_original(src: &Path, target: &Path) -> Result<(), String> {
+    if occupied(target) {
+        return Err("目标文件已存在".into());
+    }
+    if fs::rename(src, target).is_ok() {
+        return Ok(());
+    }
+    copy_original(src, target)?;
+    fs::remove_file(src).map_err(|e| format!("已复制，但删除原文件失败：{e}"))
+}
+
 fn resize_one(src: &Path, target: &Path, max_px: u32, quality: u8) -> Result<(), String> {
     let rendered = render_jpeg(src, max_px, quality)?;
     let ext = ext_of(src).unwrap_or_default();
@@ -354,7 +372,31 @@ mod tests {
             max_px: 1000,
             quality: 85,
             include_companions: true,
+            move_files: false,
         }
+    }
+
+    #[test]
+    fn move_takes_raw_along_and_never_overwrites() {
+        let a = tempfile::tempdir().unwrap();
+        let out = tempfile::tempdir().unwrap();
+        let jpg = a.path().join("IMG_2.JPG");
+        let raw = a.path().join("IMG_2.CR3");
+        let other = a.path().join("IMG_3.JPG");
+        fs::write(&jpg, make_jpeg(80, 60)).unwrap();
+        fs::write(&raw, b"raw bytes").unwrap();
+        fs::write(&other, make_jpeg(80, 60)).unwrap();
+        fs::write(out.path().join("IMG_3.JPG"), b"existing").unwrap();
+
+        let mut r = req(&[&jpg, &other], out.path(), ExportMode::Original);
+        r.move_files = true;
+        let res = run_export(&r, &AtomicBool::new(false), &|_| {}).unwrap();
+        assert_eq!(res.exported, 2);
+        assert!(!jpg.exists() && !raw.exists() && !other.exists(), "原位置不再保留");
+        assert_eq!(fs::read(out.path().join("IMG_2.CR3")).unwrap(), b"raw bytes");
+        assert!(out.path().join("IMG_2.JPG").exists());
+        assert_eq!(fs::read(out.path().join("IMG_3.JPG")).unwrap(), b"existing", "已有文件不能被覆盖");
+        assert!(out.path().join("IMG_3 (1).JPG").exists());
     }
 
     #[test]

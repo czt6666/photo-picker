@@ -551,6 +551,11 @@ $('btn-rescan').innerHTML = ICONS.refresh;
   back.querySelector('.label')!.textContent = bt;
 }
 
+/** 导出时移动了文件：本地相册重新扫描（挪走的照片消失、新文件夹出现）；远程相册的原图在本机别处，不用动 */
+const onMoved = () => {
+  if (!remote.active) void rescan();
+};
+
 const workdirBtn = $<HTMLButtonElement>('btn-workdir');
 const shareBtn = $<HTMLButtonElement>('btn-share');
 workdirBtn.addEventListener('click', () => {
@@ -558,7 +563,7 @@ workdirBtn.addEventListener('click', () => {
   void showWorkdirMenu(r.left, r.bottom + 4);
 });
 $('btn-rescan').addEventListener('click', () => void rescan());
-$('btn-export').addEventListener('click', () => openExportDialog());
+$('btn-export').addEventListener('click', () => openExportDialog(onMoved));
 starBtn.addEventListener('click', () => void toggleStar(starTargets()));
 
 /**
@@ -788,7 +793,7 @@ gridEl.addEventListener('contextmenu', (e) => {
     { label: allStarred ? t('取消星标') : t('加星标'), action: () => void toggleStar(targets) },
   ];
   if (isTauri && !isRemotePath(p.path)) items.push({ label: REVEAL_LABEL, action: () => void revealItemInDir(p.path).catch(() => {}) });
-  if (isTauri) items.push({ label: t('导出'), action: () => openExportDialog() });
+  if (isTauri) items.push({ label: t('导出'), action: () => openExportDialog(onMoved) });
   contextMenu(e.clientX, e.clientY, items);
 });
 
@@ -1062,7 +1067,7 @@ window.addEventListener('keydown', (e) => {
   let handled = true;
   if (mod && k.toLowerCase() === 'a') grid.selectAll();
   else if (mod && k === '8') void toggleStar(starTargets());
-  else if (mod && k.toLowerCase() === 'e') isTauri && openExportDialog();
+  else if (mod && k.toLowerCase() === 'e') isTauri && openExportDialog(onMoved);
   else if (mod && k.toLowerCase() === 'f') search.focus();
   else if (mod && k.toLowerCase() === 'o') isTauri && void chooseWorkdir();
   else if (mod && k === ',') showSettings();
