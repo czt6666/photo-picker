@@ -3,3 +3,4 @@ open_clip_torch
 pillow
 pillow-heif
 numpy
+pyobjc-framework-Vision; sys_platform == 'darwin'

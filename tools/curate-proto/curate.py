@@ -187,7 +187,7 @@ def embed_and_score(items, key):
 # ---------- 去重 + 挑选 ----------
 
 
-def pick(items, emb, aes, quality_ok, k):
+def pick(items, emb, aes, quality_ok, k, gap=90, burst=0.90, dup=0.96):
     n = len(items)
     sim = emb @ emb.T
     order = sorted(range(n), key=lambda i: items[i]["time"])
@@ -203,9 +203,9 @@ def pick(items, emb, aes, quality_ok, k):
         return x
 
     for a, b in zip(order, order[1:]):
-        if abs(items[b]["time"] - items[a]["time"]) <= 90 and sim[a, b] >= 0.90:
+        if abs(items[b]["time"] - items[a]["time"]) <= gap and sim[a, b] >= burst:
             parent[find(a)] = find(b)
-    ii, jj = np.where(np.triu(sim, 1) >= 0.96)
+    ii, jj = np.where(np.triu(sim, 1) >= dup)
     for a, b in zip(ii, jj):
         parent[find(a)] = find(b)
 
@@ -327,7 +327,7 @@ def main():
     # 存下指纹和分数，给 taste.py（学你的口味）用
     np.savez_compressed(
         Path(args.out).expanduser().with_suffix(".npz"),
-        album=folder.name, time=np.array([it["time"] for it in items]),
+        album=folder.name, names=np.array([str(it["path"].relative_to(folder)) for it in items]), time=np.array([it["time"] for it in items]),
         picked=np.array([i in starred_idx for i in range(n)]), ok=np.array(quality_ok),
         **{f"emb_{k2}": embs[k2] for k2 in runs}, **{f"aes_{k2}": np.array(r["aes"]) for k2, r in runs.items()},
     )
