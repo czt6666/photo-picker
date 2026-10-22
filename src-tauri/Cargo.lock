@@ -2639,7 +2639,7 @@ dependencies = [
 
 [[package]]
 name = "photo-picker"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "blake3",
  "core-foundation",

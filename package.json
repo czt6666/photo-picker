@@ -1,7 +1,7 @@
 {
   "name": "photo-picker",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.3.0",
   "type": "module",
   "description": "仿 Picasa 3 的选片工具（macOS / Windows）",
   "scripts": {
