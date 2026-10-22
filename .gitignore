@@ -1,5 +1,6 @@
 node_modules/
 dist/
+dist-web/
 src-tauri/target/
 src-tauri/gen/schemas/
 .DS_Store
@@ -10,4 +11,5 @@ __pycache__/
 *.pyc
 .preview/
 online/server/target/
+online/server/target-linux/
 online/server/data/

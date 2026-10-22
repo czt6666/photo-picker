@@ -12,8 +12,12 @@ import { isWeb } from './platform';
 import { prefs } from './store';
 import type { Folder, Library, Photo } from './types';
 
-/** 远程相册服务器。不让用户配：本地调试连本机，发布版连正式服务器，网页版就是打开它的那台 */
-export const SERVER = isWeb ? (globalThis.location?.origin ?? '') : import.meta.env.DEV ? 'http://localhost:8081' : 'https://czt666.cn';
+/** 远程相册服务器。不让用户配：本地调试连本机，发布版连正式服务器，网页版就是打开它的那台（带上部署的路径，如 /photo-picker） */
+export const SERVER = isWeb
+  ? (globalThis.location?.origin ?? '') + import.meta.env.BASE_URL.replace(/\/+$/, '')
+  : import.meta.env.DEV
+    ? 'http://localhost:8081'
+    : 'https://czt666.cn/photo-picker';
 
 export const REMOTE = 'remote:';
 export const isRemotePath = (p: string): boolean => p.startsWith(REMOTE);
@@ -87,10 +91,10 @@ export class RemoteError extends Error {
 
 const trimSlash = (s: string) => s.replace(/\/+$/, '');
 
-/** 从用户粘贴的东西里认出服务器和相册码：完整链接 `https://x.com/r/ABC…`，或者只有码 */
+/** 从用户粘贴的东西里认出服务器和相册码：完整链接 `https://x.com/r/ABC…`（服务器可以带路径，如 `https://x.com/photo-picker/r/ABC…`），或者只有码 */
 export function parseShareInput(input: string, fallbackServer: string): { server: string; code: string } | null {
   const s = input.trim();
-  const m = s.match(/^(https?:\/\/[^/\s]+)(?:\/.*)?\/r\/([0-9A-Za-z]{4,32})\b/);
+  const m = s.match(/^(https?:\/\/[^\s]+?)\/r\/([0-9A-Za-z]{4,32})\b/);
   if (m) return { server: m[1], code: m[2].toUpperCase() };
   if (/^[0-9A-Za-z]{4,32}$/.test(s) && fallbackServer) return { server: trimSlash(fallbackServer), code: s.toUpperCase() };
   return null;
