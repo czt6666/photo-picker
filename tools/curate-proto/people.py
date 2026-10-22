@@ -89,7 +89,10 @@ class Yolo:
     def __init__(self, weights="yolo11m.pt", conf=0.15):
         from ultralytics import YOLO
 
+        import torch
+
         self.model, self.conf = YOLO(weights), conf
+        self.dev = "mps" if torch.backends.mps.is_available() else None
 
     def __call__(self, path):
         from PIL import Image, ImageOps
@@ -104,7 +107,7 @@ class Yolo:
             crops += [(x, y, x + cw, y + ch) for x in (0, W - cw) for y in (0, H - ch)]
         best_conf, best_area, best_h, n = 0.0, 0.0, 0.0, 0
         for x0, y0, x1, y1 in crops:
-            r = self.model.predict(im.crop((x0, y0, x1, y1)), imgsz=1280, conf=self.conf, classes=[0], verbose=False)[0]
+            r = self.model.predict(im.crop((x0, y0, x1, y1)), imgsz=1280, conf=self.conf, classes=[0], device=self.dev, verbose=False)[0]
             for (bx0, by0, bx1, by1), c in zip(r.boxes.xyxy.tolist(), r.boxes.conf.tolist()):
                 n += 1
                 best_conf = max(best_conf, c)
