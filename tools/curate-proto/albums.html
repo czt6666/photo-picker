@@ -26,17 +26,17 @@ a { color: var(--accent); }
 .bar button { font: inherit; padding: 4px 12px; border-radius: 999px; border: 1px solid var(--line); background: var(--panel); color: var(--fg); cursor: pointer; }
 .bar button[aria-pressed="true"] { background: var(--fg); color: var(--bg); border-color: var(--fg); }
 button:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 250px), 1fr)); gap: 12px; }
 .agrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; }
 figure { margin: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 4px; overflow: hidden; display: grid; }
 figure img { width: 100%; aspect-ratio: 4 / 3; object-fit: cover; display: block; background: var(--line); }
-figcaption { padding: 6px 8px 8px; font-size: .74rem; display: grid; gap: 3px; min-width: 0; }
+figcaption { padding: 6px 9px 9px; font-size: .78rem; display: grid; gap: 3px; min-width: 0; }
 .row { display: flex; justify-content: space-between; gap: 6px; align-items: baseline; }
 .name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--muted); }
 .kind { white-space: nowrap; }
 .kind.k0 { color: var(--accent); }
 .kind.k2 { color: var(--muted); }
-.m { display: grid; grid-template-columns: 5.6em 3.4em 1fr; gap: 6px; align-items: center; font-variant-numeric: tabular-nums; }
+.m { display: grid; grid-template-columns: 6.6em 3.8em 1fr; gap: 6px; align-items: center; font-variant-numeric: tabular-nums; }
 .m b { font-weight: 400; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .m.on b { color: var(--fg); font-weight: 600; }
 .m .v { font-family: var(--mono); text-align: right; }

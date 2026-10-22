@@ -27,14 +27,15 @@ h1 { font-size: 1.7rem; font-weight: 800; margin: 0; text-wrap: balance; }
 .bar button[aria-pressed="true"] { background: var(--fg); color: var(--bg); border-color: var(--fg); }
 .bar .play { margin-left: auto; background: var(--accent); border-color: var(--accent); color: #fff; }
 button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 250px), 1fr)); gap: 12px; }
 figure { margin: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 4px; overflow: hidden; display: grid; cursor: zoom-in; }
 figure img { width: 100%; aspect-ratio: 4 / 3; object-fit: cover; display: block; background: var(--line); }
 figcaption { padding: 6px 9px 8px; font-size: .76rem; display: grid; gap: 1px; min-width: 0; }
 .row { display: flex; justify-content: space-between; gap: 8px; }
 .score { font-family: var(--mono); font-variant-numeric: tabular-nums; }
-.album { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--muted); }
-.agree { color: var(--accent); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.album { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--muted); }
+.agree { color: var(--accent); }
+.row.why2 { display: block; }
 .agree.no { color: var(--muted); }
 .kind { white-space: nowrap; color: var(--muted); }
 .kind.p { color: var(--accent); }
@@ -113,9 +114,10 @@ function card(i, onclick, big) {
       const agree = KEYS.filter((k) => DATA.runs[k][mode].includes(i));
       if (agree.length > 1) a.textContent = agree.length === KEYS.length ? "全部模型都选" : agree.length + " 个模型都选";
     }
-    row.appendChild(a);
+    if (mode === "top") { const r2 = document.createElement("div"); r2.className = "row why2"; r2.appendChild(a); c.append(row, r2); }
+    else row.appendChild(a);
   }
-  c.appendChild(row);
+  if (!row.parentNode) c.appendChild(row);
   const meta = document.createElement("div"); meta.className = "row";
   const al = document.createElement("span"); al.className = "album"; al.textContent = p.name; al.title = p.name;
   const kd = document.createElement("span"); kd.className = "kind" + (p.kind === "人像" ? " p" : ""); kd.textContent = p.kind;
