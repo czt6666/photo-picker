@@ -1,0 +1,114 @@
+<title>相册打分</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500&family=Noto+Sans+SC:wght@400;600;800&display=swap">
+<style>
+/* 布局：总览是相册卡片墙（拼图 + 各模型平均百分位条）；相册页是照片墙，每张下面列出各模型分数和全库百分位条 */
+:root {
+  --bg: #f3f2ef; --panel: #ffffff; --fg: #1d1c1a; --muted: #6d6a63; --line: #dcd9d2;
+  --accent: #c2410c; --bar: #d9d4ca;
+  --sans: "Noto Sans SC", -apple-system, "PingFang SC", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #161514; --panel: #201f1d; --fg: #ece9e3; --muted: #9c978d; --line: #34322e; --accent: #f08a4b; --bar: #3a3732; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #161514; --panel: #201f1d; --fg: #ece9e3; --muted: #9c978d; --line: #34322e; --accent: #f08a4b; --bar: #3a3732; color-scheme: dark }
+[hidden] { display: none !important; }
+body { background: var(--bg); color: var(--fg); font-family: var(--sans); line-height: 1.55;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 24px 60px; }
+main { max-width: 1280px; margin: 0 auto; display: grid; gap: 20px; }
+h1 { font-size: 1.6rem; font-weight: 800; margin: 0; text-wrap: balance; }
+.lead { color: var(--muted); margin: 4px 0 0; max-width: 70ch; font-size: .92rem; }
+a { color: var(--accent); }
+.bar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; font-size: .88rem; }
+.bar span { color: var(--muted); }
+.bar button { font: inherit; padding: 4px 12px; border-radius: 999px; border: 1px solid var(--line); background: var(--panel); color: var(--fg); cursor: pointer; }
+.bar button[aria-pressed="true"] { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+button:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px; }
+.agrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; }
+figure { margin: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 4px; overflow: hidden; display: grid; }
+figure img { width: 100%; aspect-ratio: 4 / 3; object-fit: cover; display: block; background: var(--line); }
+figcaption { padding: 6px 8px 8px; font-size: .74rem; display: grid; gap: 3px; min-width: 0; }
+.row { display: flex; justify-content: space-between; gap: 6px; align-items: baseline; }
+.name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--muted); }
+.kind { white-space: nowrap; }
+.kind.k0 { color: var(--accent); }
+.kind.k2 { color: var(--muted); }
+.m { display: grid; grid-template-columns: 5.6em 3.4em 1fr; gap: 6px; align-items: center; font-variant-numeric: tabular-nums; }
+.m b { font-weight: 400; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.m.on b { color: var(--fg); font-weight: 600; }
+.m .v { font-family: var(--mono); text-align: right; }
+.track { height: 6px; background: var(--bar); border-radius: 3px; overflow: hidden; }
+.track i { display: block; height: 100%; background: var(--muted); }
+.m.on .track i { background: var(--accent); }
+.mosaic { display: grid; grid-template-columns: 1fr 1fr; gap: 2px; }
+.mosaic img { aspect-ratio: 4 / 3; object-fit: cover; width: 100%; display: block; }
+.acard { text-decoration: none; color: inherit; }
+.acard figcaption { font-size: .82rem; gap: 5px; }
+.acard h2 { font-size: 1rem; margin: 0; font-weight: 600; }
+.why { color: var(--muted); font-size: .68rem; }
+</style>
+
+<main id="app"></main>
+
+<script>
+const DATA = /*DATA*/null;
+const KEYS = Object.keys(DATA.names);
+const app = document.getElementById("app");
+const el = (tag, props, ...kids) => { const e = Object.assign(document.createElement(tag), props || {}); e.append(...kids); return e; };
+const KC = { "人像": "k0", "有人": "k1", "无人": "k2" };
+
+function metric(k, score, p, on) {
+  const tr = el("span", { className: "track" }, el("i", { style: "width:" + p + "%" }));
+  return el("div", { className: "m" + (on ? " on" : "") }, el("b", { textContent: DATA.names[k] }),
+    el("span", { className: "v", textContent: score ?? "–" }), tr);
+}
+
+function index() {
+  document.title = "相册打分 · " + DATA.root;
+  app.append(el("header", {}, el("h1", { textContent: "相册打分 · " + DATA.root }),
+    el("p", { className: "lead", textContent: DATA.total + " 张照片，按目录分 " + DATA.albums.length + " 组。条形是这个目录在各模型下的平均全库百分位：50 表示和全库平均水平一样，越长越好。点进去看每张照片的分数。" })));
+  const g = el("div", { className: "agrid" });
+  DATA.albums.forEach((a) => {
+    const mos = el("div", { className: "mosaic" }, ...a.top.map((s) => el("img", { src: s, alt: "", loading: "lazy" })));
+    const cap = el("figcaption", {},
+      el("div", { className: "row" }, el("h2", { textContent: a.dir }), el("span", { className: "name", textContent: a.count + " 张" })),
+      el("div", { className: "why", textContent: "人像 " + a.kinds["人像"] + " · 有人 " + a.kinds["有人"] + " · 无人 " + a.kinds["无人"] }),
+      ...KEYS.map((k) => metric(k, a.mean[k], a.mean[k], false)));
+    g.append(el("a", { className: "acard", href: a.file }, el("figure", {}, mos, cap)));
+  });
+  app.append(g);
+}
+
+function album() {
+  document.title = "相册打分 · " + DATA.dir;
+  let sortBy = KEYS.includes("v25") ? "v25" : KEYS[0], kind = "全部";
+  try { const s = localStorage.getItem("albums-sort"); if (s && (KEYS.includes(s) || s === "time")) sortBy = s; } catch (e) {}
+  app.append(el("header", {}, el("a", { href: "index.html", textContent: "← 全部目录" }),
+    el("h1", { textContent: DATA.dir }),
+    el("p", { className: "lead", textContent: DATA.count + " 张。每张下面是各模型的原始分和全库百分位条（条越长，在全库里排得越靠前）。人像 " + DATA.kinds["人像"] + " · 有人 " + DATA.kinds["有人"] + " · 无人 " + DATA.kinds["无人"] + "。" })));
+  const sb = el("div", { className: "bar" }, el("span", { textContent: "排序" }));
+  const kb = el("div", { className: "bar" }, el("span", { textContent: "人像" }));
+  const g = el("div", { className: "grid" });
+  app.append(sb, kb, g);
+  const opts = [...KEYS.map((k) => [k, DATA.names[k]]), ["time", "拍摄时间"]];
+  opts.forEach(([k, label]) => sb.append(el("button", { type: "button", id: "sort-" + k, textContent: label, onclick: () => { sortBy = k; try { localStorage.setItem("albums-sort", k); } catch (e) {} draw(); } })));
+  ["全部", "人像", "有人", "无人"].forEach((k) => kb.append(el("button", { type: "button", id: "kind-" + k, textContent: k, onclick: () => { kind = k; draw(); } })));
+  function draw() {
+    sb.querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", b.id === "sort-" + sortBy));
+    kb.querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", b.id === "kind-" + kind));
+    let L = DATA.photos.filter((p) => kind === "全部" || p.kind === kind);
+    L = L.slice().sort((a, b) => sortBy === "time" ? a.time - b.time : (b.p[sortBy] ?? 0) - (a.p[sortBy] ?? 0));
+    g.replaceChildren(...L.map((p) => el("figure", {},
+      el("img", { src: p.src, alt: p.name, loading: "lazy" }),
+      el("figcaption", {},
+        el("div", { className: "row" }, el("span", { className: "name", textContent: p.name, title: p.name }), el("span", { className: "kind " + KC[p.kind], textContent: p.kind })),
+        ...KEYS.map((k) => metric(k, p.s[k], p.p[k], k === sortBy)),
+        el("div", { className: "why", textContent: p.why })))));
+  }
+  draw();
+}
+
+DATA.mode === "index" ? index() : album();
+</script>

@@ -63,12 +63,12 @@ section { display: grid; gap: 12px; }
   <div class="bar" id="bar" role="group" aria-label="美学模型"></div>
   <div class="sub" id="mode" role="group" aria-label="范围">
     <button type="button" id="mode-all" data-m="all">全部照片</button>
-    <button type="button" id="mode-wall" data-m="wall">壁纸：不含人像</button>
+    <button type="button" id="mode-wall" data-m="wall">壁纸：不含人</button>
   </div>
   <div class="grid" id="grid"></div>
   <section>
     <h2>人像识别抽查 <small id="kinds"></small></h2>
-    <p class="lead">「人像」是人为主体的照片，做壁纸时排除；「有路人」是风景里有人但很小，壁纸可用。每类随机抽一些，按 CLIP 判断「在拍人」的概率从低到高排，越靠前越接近分界。</p>
+    <p class="lead">「人像」是人为主体的照片，「有人」是画面里有人但不是主体（路人、航拍里的小人）。壁纸只用「无人」，宁可错杀。每类随机抽一些，「无人」里最像有人的排在最前，最可能漏判的先看。</p>
     <div class="sub" id="kindbar" role="group" aria-label="人像类别"></div>
     <div class="grid small" id="kgrid"></div>
   </section>
@@ -163,7 +163,7 @@ document.addEventListener("keydown", (e) => {
 });
 
 $("title").textContent = "全库精选 · " + DATA.root;
-$("lead").textContent = "从 " + DATA.albums + " 个相册的 " + DATA.n + " 张照片里，每个模型各挑 " + DATA.k + " 张。连拍和几乎一样的只留一张，每个相册最多 " + DATA.cap + " 张。「壁纸」那组排除了以人为主体的照片。照片原地没动。各模型的分数刻度不同，只在同一个模型里比高低。";
+$("lead").textContent = "从 " + DATA.albums + " 个相册的 " + DATA.n + " 张照片里，每个模型各挑 " + DATA.k + " 张。连拍和几乎一样的只留一张，每个相册最多 " + DATA.cap + " 张。「壁纸」那组只用一个人都没检测到的照片。照片原地没动。各模型的分数刻度不同，只在同一个模型里比高低。";
 $("kinds").textContent = Object.entries(DATA.kinds).map(([k, v]) => k + " " + v + " 张").join(" · ");
 KEYS.forEach((k) => {
   const b = document.createElement("button");
@@ -175,7 +175,7 @@ const pb = document.createElement("button");
 pb.type = "button"; pb.className = "play"; pb.id = "play"; pb.textContent = "▶ 轮播"; pb.onclick = () => play(0);
 $("bar").appendChild(pb);
 document.querySelectorAll("#mode button").forEach((b) => (b.onclick = () => { mode = b.dataset.m; render(); }));
-["人像", "有路人", "无人"].forEach((k) => {
+["人像", "有人", "无人"].forEach((k) => {
   const b = document.createElement("button");
   b.type = "button"; b.dataset.k = k; b.id = "kind-" + k; b.textContent = k + "（" + (DATA.kinds[k] || 0) + "）";
   b.onclick = () => { kind = k; renderKinds(); };

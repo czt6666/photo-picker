@@ -134,6 +134,16 @@ class QReAlign:
         return out
 
 
+class YoloPeople:
+    """YOLO11 找人（整图 + 大图切 2×2），读原文件。"""
+
+    def __init__(self):
+        self.det = people.Yolo()
+
+    def __call__(self, imgs, paths):
+        return [{"yolo": self.det(p)} for p in paths]
+
+
 class Vision:
     """苹果 Vision 的人体/人脸检测，读原文件（只在 Mac 上）。"""
 
@@ -152,7 +162,7 @@ class Vision:
 
 
 SCORERS = {"l14": (L14, "aes_l14"), "v25": (V25, "aes_v25"), "topiq": (Topiq, "aes_topiq"),
-           "qrealign": (QReAlign, "aes_qrealign"), "vision": (Vision, "vision")}
+           "qrealign": (QReAlign, "aes_qrealign"), "vision": (Vision, "vision"), "yolo": (YoloPeople, "yolo")}
 
 
 def scan(root):
@@ -217,7 +227,7 @@ def main():
     keys = [m.strip() for m in args.models.split(",") if m.strip()]
     if "l14" not in keys:
         keys.insert(0, "l14")  # 指纹总要有
-    jobs = keys + ["vision"] if sys.platform == "darwin" else keys
+    jobs = keys + (["vision", "yolo"] if sys.platform == "darwin" else ["yolo"])
 
     files = scan(root)
     print(f"{root}：{len(files)} 张照片")
@@ -237,6 +247,8 @@ def main():
             todo = [p for p in files if "person_p" not in cache.get(str(p), {})]
         else:
             todo = [p for p in files if str(p) in cache and field not in cache[str(p)]]
+            if job == "vision":  # 旧缓存没有人体框高度，重算
+                todo = [p for p in files if str(p) in cache and "body_h" not in (cache[str(p)].get("vision") or {})]
         if not todo:
             continue
         print(f"  {job}：要算 {len(todo)} 张", flush=True)
@@ -280,9 +292,9 @@ def main():
     med = {a: float(np.median([f["sharp"] for f, b in zip(feat, albums) if b == a])) for a in set(albums)}
     ok = [not (f["sharp"] < 0.25 * med[a] or f["dark"] > 0.45 or f["bright"] > 0.35) for f, a in zip(feat, albums)]
 
-    cls = [people.classify(f.get("vision"), f["person_p"]) for f in feat]
+    cls = [people.classify(f.get("vision"), f["person_p"], f.get("yolo")) for f in feat]
     kinds = [c[0] for c in cls]
-    counts = {k2: kinds.count(k2) for k2 in ("人像", "有路人", "无人")}
+    counts = {k2: kinds.count(k2) for k2 in ("人像", "有人", "无人")}
     print(f"  人像识别：{counts}")
 
     nalb = len(set(albums))
@@ -291,7 +303,8 @@ def main():
     print(f"  {nalb} 个相册，质量合格 {sum(ok)} 张；每个模型挑 {k} 张，每个相册最多 {cap} 张")
 
     runs = {}
-    everyone, no_people = [True] * n, [kd != "人像" for kd in kinds]
+    # 壁纸只收三路检测都说没人的（宁可错杀）
+    everyone, no_people = [True] * n, [kd == "无人" for kd in kinds]
     for key in keys:
         if not any(f"aes_{key}" in f for f in feat):
             continue
@@ -303,10 +316,12 @@ def main():
     # 人像识别抽查：每类按 CLIP 概率排开取一些，边界上的也看得到
     rng = np.random.default_rng(0)
     sample = {}
-    for kd, m in (("人像", 48), ("有路人", 48), ("无人", 24)):
+    for kd, m in (("人像", 36), ("有人", 48), ("无人", 48)):
         idx = [i for i in range(n) if kinds[i] == kd]
         if len(idx) > m:
-            idx = sorted(rng.choice(idx, m, replace=False).tolist(), key=lambda i: feat[i]["person_p"])
+            idx = rng.choice(idx, m, replace=False).tolist()
+        # 无人：最像有人的排前面（最可能漏判）；其他两类：最不像的排前面
+        idx = sorted(idx, key=lambda i: -feat[i]["person_p"] if kd == "无人" else feat[i]["person_p"])
         sample[kd] = idx
 
     big = sorted({i for r in runs.values() for i in r["all"] + r["wall"]})
