@@ -1,6 +1,6 @@
 [package]
 name = "photo-picker"
-version = "0.3.0"
+version = "0.3.1"
 description = "仿 Picasa 3 的选片工具：滚轮秒切、星标、筛选、导出"
 edition = "2021"
 rust-version = "1.77"
