@@ -45,6 +45,17 @@ cd online
 docker compose up -d        # 打开 http://服务器IP:8080
 ```
 
+### 部署在子路径下（czt666.cn 的做法）
+
+网页和接口都放在 `https://czt666.cn/photo-picker/` 下：
+
+1. 网页用 `PP_WEB_BASE=/photo-picker/ npm run build` 构建（资源路径带上前缀）。
+2. 服务端照常跑在本机 `127.0.0.1:8081`，它不知道前缀。
+3. Nginx 把 `/photo-picker/` 去掉前缀转给它，配置见 [nginx-photo-picker.conf](nginx-photo-picker.conf)；
+   `http { }` 里还要有一句 `map $http_upgrade $connection_upgrade { default upgrade; '' close; }`（WebSocket 用）。
+
+桌面发布版连的就是 `https://czt666.cn/photo-picker`（写在 `src/remote.ts` 的 `SERVER`），分享链接形如 `https://czt666.cn/photo-picker/r/ABC…`。
+
 正式使用请在前面套 HTTPS（Caddy / Nginx），手机浏览器在 http 下不让复制链接，也不让网页全屏。
 
 | 环境变量 | 默认 | 说明 |
@@ -55,7 +66,7 @@ docker compose up -d        # 打开 http://服务器IP:8080
 | `PP_CREATE_PASSWORD` | 空 | 设了以后建相册要输这个密码，防止陌生人用你的服务器 |
 | `PP_BEHIND_PROXY` | 空 | 前面套了 Nginx/CDN 时设为 `1`，按 `X-Forwarded-For` 认访客 IP |
 
-桌面版连的是哪台服务器：设置（⚙）里的「服务器」。网页版就是打开它的那台。
+桌面版连哪台服务器写死在代码里：本地调试 `http://localhost:8081`，发布版 `https://czt666.cn/photo-picker`。网页版就是打开它的那台。
 
 容量估算：一张预览+缩略约 0.45MB，1000 张约 450MB。
 

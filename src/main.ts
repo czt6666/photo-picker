@@ -15,7 +15,7 @@ import { LANGS, langPref, setLang, t, translateDom, type Lang } from './i18n';
 import { closeMenu, contextMenu, esc, toast, type MenuItem } from './ui';
 import { formatBytes, Viewer } from './viewer';
 import { isBrowserShortcut, isMac, isTauri, isTouch, isWeb, mod as modKey, MOD_NAME, REVEAL_LABEL } from './platform';
-import { isRemotePath, parseRemotePath, parseShareInput, remote, type RemoteAlbum, type RemoteEvent } from './remote';
+import { isRemotePath, parseRemotePath, parseShareInput, remote, SERVER, type RemoteAlbum, type RemoteEvent } from './remote';
 import { confirmBox, continueUpload, ensureName, promptBox, showConnect, showCreate, showShare, stopUpload, uploadingCode } from './remoteUi';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -1032,10 +1032,10 @@ async function boot(): Promise<void> {
     return;
   }
   // 通过 /r/<相册码> 打开（网页版）：自动连上并打开这个相册
-  const m = location.pathname.match(/^\/r\/([0-9A-Za-z]{4,32})/);
+  const m = location.pathname.slice(import.meta.env.BASE_URL.length - 1).match(/^\/r\/([0-9A-Za-z]{4,32})/);
   if (m) {
-    const ok = await connectAndOpen(`${location.origin}/r/${m[1]}`);
-    history.replaceState(null, '', '/');
+    const ok = await connectAndOpen(`${SERVER}/r/${m[1]}`);
+    history.replaceState(null, '', import.meta.env.BASE_URL);
     if (ok) return;
   }
   if (remote.active) remote.activate(remote.active); // 挂上实时通道
