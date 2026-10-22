@@ -264,11 +264,11 @@ def main():
     def photos_in(d):
         return sorted(p for p in d.iterdir() if p.is_file() and p.suffix.lower() in EXTS and not p.name.startswith("."))
 
-    # 你挑过的：相册里加了星标的，加上「精选」开头的子文件夹里的（挑完挪进去的也算）。
+    # 你挑过的：相册里加了星标的，加上名字带「精选」的子文件夹里的（精选、人像-精选…）（挑完挪进去的也算）。
     # 子文件夹里的照片也放回候选池一起比，这样才能看机器能不能把它们挑出来。
     files = photos_in(folder)
     stars = {(folder, n) for n in load_stars(folder)}
-    pick_dirs = [d for d in sorted(folder.iterdir()) if d.is_dir() and d.name.startswith("精选")]
+    pick_dirs = [d for d in sorted(folder.iterdir()) if d.is_dir() and "精选" in d.name]
     for d in pick_dirs:
         sub = photos_in(d)
         files += sub
