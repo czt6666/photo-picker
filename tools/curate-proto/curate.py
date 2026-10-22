@@ -257,6 +257,7 @@ def main():
     ap.add_argument("folder")
     ap.add_argument("--out", default="curate-result.html")
     ap.add_argument("--models", default="b32,l14")
+    ap.add_argument("--v25", help="v25.py 生成的分数文件，加一组 V2.5 的结果")
     args = ap.parse_args()
 
     folder = Path(args.folder).expanduser()
@@ -324,12 +325,23 @@ def main():
         }
         print(f"  {key}: 挑 {len(chosen)} 张，连拍/相似分组后剩 {ngroups} 组，其中你加过星的 {hit} 张")
 
+    # V2.5 的分数由 v25.py 另算好（SigLIP 太大，不在这里跑）；相似度仍用 L14 的指纹。
+    # 单相册精选用宽松去重：只合并几乎一模一样的，你习惯留几张相近的
+    if args.v25:
+        vs = json.loads(Path(args.v25).expanduser().read_text())
+        aes = np.array([vs.get(str(it["path"].relative_to(folder)), 0.0) for it in items])
+        emb = embs["l14"].astype(np.float32)
+        chosen, dup_of, ngroups = pick(items, emb, aes, quality_ok, k, gap=10, burst=0.97, dup=0.985)
+        hit = len(set(chosen) & starred_idx)
+        runs["v25"] = {"chosen": chosen, "dup_of": dup_of, "aes": aes.tolist(), "groups": ngroups, "ms": 300, "hit": hit}
+        print(f"  v25: 挑 {len(chosen)} 张，宽松去重后剩 {ngroups} 组，其中你挑过的 {hit} 张")
+
     # 存下指纹和分数，给 taste.py（学你的口味）用
     np.savez_compressed(
         Path(args.out).expanduser().with_suffix(".npz"),
         album=folder.name, names=np.array([str(it["path"].relative_to(folder)) for it in items]), time=np.array([it["time"] for it in items]),
         picked=np.array([i in starred_idx for i in range(n)]), ok=np.array(quality_ok),
-        **{f"emb_{k2}": embs[k2] for k2 in runs}, **{f"aes_{k2}": np.array(r["aes"]) for k2, r in runs.items()},
+        **{f"emb_{k2}": v for k2, v in embs.items()}, **{f"aes_{k2}": np.array(r["aes"]) for k2, r in runs.items()},
     )
 
     # 页面里每张图的数据

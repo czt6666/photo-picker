@@ -58,9 +58,9 @@ figcaption { padding: 5px 8px 7px; font-size: .75rem; display: grid; gap: 1px; m
 
 <script>
 const DATA = /*DATA*/null;
-const NAMES = { b32: "小模型 B/32", l14: "大模型 L/14" };
+const NAMES = { b32: "小模型 B/32", l14: "大模型 L/14", v25: "V2.5（推荐）" };
 const $ = (id) => document.getElementById(id);
-let cur = Object.keys(DATA.runs).includes("l14") ? "l14" : Object.keys(DATA.runs)[0];
+let cur = ["v25", "l14"].find((k) => DATA.runs[k]) || Object.keys(DATA.runs)[0];
 try { const s = localStorage.getItem("curate-model"); if (s && DATA.runs[s]) cur = s; } catch (e) {}
 
 function card(i, extra) {
