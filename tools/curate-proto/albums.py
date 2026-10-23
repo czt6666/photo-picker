@@ -98,7 +98,7 @@ def main():
         photos, kinds = [], {"人像": 0, "有人": 0, "无人": 0}
         for i, src in zip(idx, srcs):
             f = feat[i]
-            kind, why = people.classify(f.get("vision"), f["person_p"], f.get("yolo"))
+            kind, why = people.classify(f.get("vision2"), f.get("yolo2"))
             kinds[kind] += 1
             rel = paths[i].relative_to(root)
             photos.append({

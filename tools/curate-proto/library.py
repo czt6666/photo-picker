@@ -46,7 +46,7 @@ def device():
 
 
 class L14:
-    """CLIP L/14：给出指纹（去重、相似度、人像判断都用它）和 LAION 美学分。"""
+    """CLIP L/14：给出指纹（去重、相似度都用它）和 LAION 美学分。"""
 
     def __init__(self):
         import open_clip
@@ -57,7 +57,6 @@ class L14:
         m, _, self.prep = open_clip.create_model_and_transforms(*cfg["clip"], cache_dir=str(CACHE / "clip"))
         self.model = m.to(self.dev).eval()
         self.head = build_head(cfg, torch).to(self.dev)
-        self.probe = people.TextProbe(self.model, self.dev)
 
     def __call__(self, imgs, paths):
         with self.torch.no_grad():
@@ -66,8 +65,7 @@ class L14:
             e = e / e.norm(dim=-1, keepdim=True)
             aes = self.head(e).squeeze(-1).cpu().numpy()
         e = e.cpu().numpy()
-        prob = self.probe.person_prob(e)
-        return [{"emb": e[i].astype(np.float16), "aes_l14": float(aes[i]), "person_p": float(prob[i])} for i in range(len(imgs))]
+        return [{"emb": e[i].astype(np.float16), "aes_l14": float(aes[i])} for i in range(len(imgs))]
 
 
 class V25:
@@ -135,13 +133,13 @@ class QReAlign:
 
 
 class YoloPeople:
-    """YOLO11 找人（整图 + 大图切 2×2），读原文件。"""
+    """YOLO11 找人（整图 + 大图切 2×2）+ 姿态模型核对骨架，读原文件。"""
 
     def __init__(self):
         self.det = people.Yolo()
 
     def __call__(self, imgs, paths):
-        return [{"yolo": self.det(p)} for p in paths]
+        return [{"yolo2": self.det(p)} for p in paths]
 
 
 class Vision:
@@ -154,15 +152,15 @@ class Vision:
         out = []
         for p in paths:
             try:
-                out.append({"vision": people.vision_people(p)})
+                out.append({"vision2": people.vision_people(p)})
             except Exception as e:
                 print(f"  Vision 失败 {p.name}: {e}", file=sys.stderr)
-                out.append({"vision": None})
+                out.append({"vision2": None})
         return out
 
 
 SCORERS = {"l14": (L14, "aes_l14"), "v25": (V25, "aes_v25"), "topiq": (Topiq, "aes_topiq"),
-           "qrealign": (QReAlign, "aes_qrealign"), "vision": (Vision, "vision"), "yolo": (YoloPeople, "yolo")}
+           "qrealign": (QReAlign, "aes_qrealign"), "vision": (Vision, "vision2"), "yolo": (YoloPeople, "yolo2")}
 
 
 def scan(root):
@@ -246,11 +244,9 @@ def main():
     for job in jobs:
         field = SCORERS[job][1]
         if job == "l14":
-            todo = [p for p in files if "person_p" not in cache.get(str(p), {})]
+            todo = [p for p in files if "emb" not in cache.get(str(p), {})]
         else:
             todo = [p for p in files if str(p) in cache and field not in cache[str(p)]]
-            if job == "vision":  # 旧缓存没有人体框高度，重算
-                todo = [p for p in files if str(p) in cache and "body_h" not in (cache[str(p)].get("vision") or {})]
         if not todo:
             continue
         print(f"  {job}：要算 {len(todo)} 张", flush=True)
@@ -294,7 +290,7 @@ def main():
     med = {a: float(np.median([f["sharp"] for f, b in zip(feat, albums) if b == a])) for a in set(albums)}
     ok = [not (f["sharp"] < 0.25 * med[a] or f["dark"] > 0.45 or f["bright"] > 0.35) for f, a in zip(feat, albums)]
 
-    cls = [people.classify(f.get("vision"), f["person_p"], f.get("yolo")) for f in feat]
+    cls = [people.classify(f.get("vision2"), f.get("yolo2")) for f in feat]
     kinds = [c[0] for c in cls]
     counts = {k2: kinds.count(k2) for k2 in ("人像", "有人", "无人")}
     print(f"  人像识别：{counts}")
@@ -306,7 +302,8 @@ def main():
 
     runs = {}
     # 壁纸只收三路检测都说没人的（宁可错杀）
-    everyone, no_people = [True] * n, [kd == "无人" for kd in kinds]
+    # 没跑成 YOLO 的照片不知道有没有人，也不进壁纸
+    everyone, no_people = [True] * n, [kd == "无人" and "yolo2" in f for kd, f in zip(kinds, feat)]
     for key in keys:
         if not any(f"aes_{key}" in f for f in feat):
             continue
@@ -317,7 +314,7 @@ def main():
         runs[key] = {"all": a, "wall": b, "top": top, "groups": g, "ms": per.get(key)}
         print(f"  {key}: 去重后 {g} 组，挑 {len(a)} 张；不含人像 {len(b)} 张")
 
-    # 人像识别抽查：每类按 CLIP 概率排开取一些，边界上的也看得到
+    # 人像识别抽查：每类随机取一些；「无人」里排除过可疑框的（最可能漏判的）排前面
     rng = np.random.default_rng(0)
     sample = {}
     for kd, m in (("人像", 36), ("有人", 48), ("无人", 48)):
@@ -325,7 +322,8 @@ def main():
         if len(idx) > m:
             idx = rng.choice(idx, m, replace=False).tolist()
         # 无人：最像有人的排前面（最可能漏判）；其他两类：最不像的排前面
-        idx = sorted(idx, key=lambda i: -feat[i]["person_p"] if kd == "无人" else feat[i]["person_p"])
+        if kd == "无人":
+            idx = sorted(idx, key=lambda i: -people.people_boxes(feat[i].get("vision2"), feat[i].get("yolo2"))[2])
         sample[kd] = idx
 
     big = sorted({i for r in runs.values() for i in r["all"] + r["wall"] + r["top"]})

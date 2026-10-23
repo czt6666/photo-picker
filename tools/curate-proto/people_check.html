@@ -1,0 +1,118 @@
+<meta charset="utf-8">
+<title>人像识别核对</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500&family=Noto+Sans+SC:wght@400;600;800&display=swap">
+<style>
+/* 布局：上面是三类数量和「旧→新」变化按钮，下面是照片墙；每张照片上画出框：实线 = 算数的人，虚线 = 排除的可疑框 */
+:root {
+  --bg: #f3f2ef; --panel: #ffffff; --fg: #1d1c1a; --muted: #6d6a63; --line: #dcd9d2;
+  --accent: #c2410c; --ok: #1f8a4c; --bad: #d23c3c; --face: #2d6cdf;
+  --sans: "Noto Sans SC", -apple-system, "PingFang SC", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #161514; --panel: #201f1d; --fg: #ece9e3; --muted: #9c978d; --line: #34322e; --accent: #f08a4b; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #161514; --panel: #201f1d; --fg: #ece9e3; --muted: #9c978d; --line: #34322e; --accent: #f08a4b; color-scheme: dark }
+[hidden] { display: none !important; }
+body { background: var(--bg); color: var(--fg); font-family: var(--sans); line-height: 1.55;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 24px 60px; }
+main { max-width: 1280px; margin: 0 auto; display: grid; gap: 18px; }
+h1 { font-size: 1.6rem; font-weight: 800; margin: 0; }
+.lead { color: var(--muted); margin: 4px 0 0; max-width: 75ch; font-size: .92rem; }
+.stats { display: flex; flex-wrap: wrap; gap: 26px; }
+.stat b { display: block; font-family: var(--mono); font-size: 1.5rem; font-variant-numeric: tabular-nums; }
+.stat span { color: var(--muted); font-size: .8rem; }
+.bar { display: flex; gap: 8px; flex-wrap: wrap; }
+.bar button { font: inherit; font-size: .88rem; padding: 4px 12px; border-radius: 999px; border: 1px solid var(--line); background: var(--panel); color: var(--fg); cursor: pointer; }
+.bar button[aria-pressed="true"] { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.legend { display: flex; gap: 18px; flex-wrap: wrap; font-size: .82rem; color: var(--muted); }
+.legend i { display: inline-block; width: 18px; height: 11px; margin-right: 5px; vertical-align: -1px; border: 2px solid; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr)); gap: 12px; }
+figure { margin: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 4px; overflow: hidden; display: grid; }
+.pic { position: relative; cursor: zoom-in; background: var(--line); }
+.pic img { width: 100%; display: block; }
+.box { position: absolute; border: 2px solid var(--ok); pointer-events: none; }
+.box.no { border: 2px dashed var(--bad); }
+.box.v { border-color: var(--ok); border-style: dotted; }
+.box.f { border-color: var(--face); }
+.box span { position: absolute; left: -2px; top: -17px; font: 10px/14px var(--mono); padding: 0 3px; color: #fff; background: var(--ok); white-space: nowrap; }
+.box.no span { background: var(--bad); }
+figcaption { padding: 6px 9px 9px; font-size: .78rem; display: grid; gap: 2px; min-width: 0; }
+.mv { font-weight: 600; }
+.mv .to { color: var(--accent); }
+.why, .name { color: var(--muted); }
+.name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+</style>
+
+<main>
+  <header>
+    <h1 id="title">人像识别核对</h1>
+    <p class="lead" id="lead"></p>
+  </header>
+  <div class="stats" id="stats"></div>
+  <div class="legend">
+    <span><i style="border-color:var(--ok)"></i>算数的人（YOLO，旁边是把握 / 骨架关键点数）</span>
+    <span><i style="border-color:var(--ok);border-style:dotted"></i>苹果 Vision 人体框</span>
+    <span><i style="border-color:var(--face)"></i>人脸</span>
+    <span><i style="border-color:var(--bad);border-style:dashed"></i>排除的可疑框</span>
+  </div>
+  <div class="bar" id="bar" role="group" aria-label="变化"></div>
+  <p class="lead" id="glead"></p>
+  <div class="grid" id="grid"></div>
+</main>
+
+<script src="big/index.js"></script>
+<script>
+/*BIGVIEW*/
+const DATA = /*DATA*/null;
+const $ = (id) => document.getElementById(id);
+const el = (tag, props, ...kids) => { const e = Object.assign(document.createElement(tag), props || {}); e.append(...kids); return e; };
+const keyOf = (it) => it.old && it.old !== it.new ? it.old + "→" + it.new : "仍无人·排除过可疑框";
+const groups = {};
+DATA.items.forEach((it) => (groups[keyOf(it)] = groups[keyOf(it)] || []).push(it));
+const ORDER = ["人像→无人", "有人→无人", "人像→有人", "有人→人像", "无人→有人", "无人→人像", "仍无人·排除过可疑框"];
+const keys = Object.keys(groups).sort((a, b) => (ORDER.indexOf(a) + 99) % 99 - (ORDER.indexOf(b) + 99) % 99);
+const NOTE = {
+  "人像→无人": "旧规则说是人像，新规则说没人。多半是 CLIP 觉得「像在拍人」或 YOLO 把波纹、树林当成了人。要重点看：真的没人吗？",
+  "有人→无人": "旧规则说有人，新规则说没人。这些会进壁纸，要重点看：有没有漏掉的小人？",
+  "人像→有人": "人还在，但新规则觉得不是主体（旧的多半是 CLIP 判的人像）。",
+  "仍无人·排除过可疑框": "两套规则都说没人，但 YOLO 在上面找到过可疑的框、被骨架核对排除了。按把握从高到低，最可能漏判的在前面。",
+};
+let cur = keys[0];
+
+function box(b, cls, label) {
+  const [x0, y0, x1, y1] = b;
+  const d = el("div", { className: "box " + cls });
+  d.style.cssText = `left:${x0 * 100}%;top:${y0 * 100}%;width:${(x1 - x0) * 100}%;height:${(y1 - y0) * 100}%`;
+  if (label) d.append(el("span", { textContent: label }));
+  return d;
+}
+function card(it, i, L) {
+  const pic = el("div", { className: "pic", onclick: () => BigView.open(L.map((x) => ({ rel: x.rel, src: x.src, it: x })), i, { cap: (o) => o.it.rel + "　" + (o.it.old ? o.it.old + " → " : "") + o.it.new + "　" + o.it.why }) },
+    el("img", { src: it.src, alt: it.rel, loading: "lazy" }));
+  it.vboxes.forEach((b) => pic.append(box(b, "v")));
+  it.faces.forEach((b) => pic.append(box(b, "f")));
+  it.boxes.forEach((b) => pic.append(box(b, b[6] ? "" : "no", b[4].toFixed(2) + (b[5] >= 0 ? " / " + b[5] : ""))));
+  return el("figure", {}, pic, el("figcaption", {},
+    el("div", { className: "mv" }, ...(it.old ? [it.old + " → "] : []), el("span", { className: "to", textContent: it.new })),
+    el("div", { className: "why", textContent: it.why }),
+    el("div", { className: "name", textContent: it.rel, title: it.rel })));
+}
+function render() {
+  $("bar").querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", b.dataset.k === cur));
+  $("glead").textContent = NOTE[cur] || "";
+  const L = groups[cur] || [];
+  $("grid").replaceChildren(...L.map((it, i) => card(it, i, L)));
+}
+
+$("lead").textContent = "新规则不再用 CLIP：苹果 Vision 和 YOLO 先找像人的框，再把 YOLO 的每个框裁出来交给姿态模型找骨架（鼻、眼、肩、肘、腕、胯、膝、踝）。身高超过画面 "
+  + Math.round(DATA.rule.big_h * 100) + "% 的大框要找到至少 " + DATA.rule.kp + " 个清楚的关键点才算人（YOLO 把握 ≥ " + DATA.rule.trust
+  + " 的直接算）；小框看不清骨架，YOLO 把握 ≥ " + DATA.rule.small + " 就算有人。下面列出和旧规则判得不一样的照片，点照片看大图。";
+$("stats").innerHTML = [[DATA.n, "张照片"], [DATA.counts["人像"], "人像"], [DATA.counts["有人"], "有人"], [DATA.counts["无人"], "无人（可做壁纸）"]]
+  .map(([v, l]) => '<div class="stat"><b>' + v + '</b><span>' + l + '</span></div>').join("");
+keys.forEach((k) => $("bar").append(el("button", { type: "button", textContent: k + "（" + groups[k].length + "）", onclick: () => { cur = k; render(); } }, )));
+$("bar").querySelectorAll("button").forEach((b, i) => (b.dataset.k = keys[i]));
+render();
+</script>
