@@ -13,7 +13,7 @@
 import { rawTag, thumbUrl } from './api';
 import { GridLayout } from './gridLayout';
 import { ratingStars } from './rating';
-import { store } from './store';
+import { store, UNREAD_SECTION } from './store';
 import { t } from './i18n';
 import { ICONS } from './icons';
 import { esc } from './ui';
@@ -47,6 +47,8 @@ export class Grid {
   private cols = 1;
   private colW = 0;
   private rowH = 0;
+  /** 上次排版时的照片列表（排版换了顺序时，用它找回原来眼前的那张） */
+  private laidOut: Photo[] = [];
   private layout = new GridLayout([], { cols: 1, rowH: 0, gap: GAP, pad: PAD, headH: HEAD_H, headFirst: false });
   /** 手机上像“照片”App 那样：固定列数、正方形格子铺满、缝很细。null = 平常的相框样式 */
   private compactCols: number | null = null;
@@ -159,17 +161,21 @@ export class Grid {
       this.el.scrollTop = 0;
       this.curDir = null;
     }
-    this.relayout(keepScroll ? this.firstVisibleIndex() : 0);
+    // 保留滚动位置时按眼前那张照片的路径对位（列表可能换了顺序、前面多了东西）
+    if (keepScroll) this.relayout(undefined, true, true);
+    else this.relayout(0);
   }
 
-  /** 列表末尾接上了新的相册：只重新排版，滚动位置不动 */
+  /**
+   * 列表接上了别的相册（接在后面、前面，或者新相册里的未读照片挪进了最上面那一栏）：
+   * 重新排版，并让眼前这张照片停在屏幕上原来的位置，不跳
+   */
   extend(): void {
-    this.relayout(undefined, true);
+    this.relayout(undefined, true, true);
   }
 
-  /** 列表前面接上了上一个相册：重新排版，并把滚动位置往下挪新增的高度，眼前的照片不跳 */
   prepend(): void {
-    this.relayout(undefined, true, true);
+    this.extend();
   }
 
   /** 重新检查一遍（比如“下一个相册”加载完了，看看还要不要接着接） */
@@ -306,7 +312,17 @@ export class Grid {
       this.colW = width / this.cols;
     }
     this.rowH = this.cellH + this.gap;
-    const oldH = this.layout.height;
+    // 记下眼前第一张照片和它离视口顶部的距离（按路径找，列表顺序变了也能对上）
+    const keepIdx = this.layout.firstIndexAt(this.el.scrollTop);
+    const oldLayout = this.layout;
+    const oldList = this.laidOut;
+    const oldTop = this.el.scrollTop;
+    // 是一段的第一行时连分界线一起算，接上东西之后分界线也还在原处
+    const rowTop = (L: GridLayout, i: number) => {
+      const p = L.pos(i);
+      return p ? p.y - (p.row === 0 ? p.band.head : 0) : null;
+    };
+
     this.layout = new GridLayout(store.sections, {
       cols: this.cols,
       rowH: this.rowH,
@@ -314,17 +330,27 @@ export class Grid {
       pad: this.pad,
       headH: HEAD_H,
       // 看单个相册时顶栏已经写着相册名，第一段上面不用再放；星标汇总里每个相册都标出来
-      headFirst: store.view.kind !== 'folder',
+      headFirst: store.view.kind !== 'folder' || store.sections[0]?.dir === UNREAD_SECTION,
     });
     this.inner.style.height = `${this.layout.height}px`;
+    this.laidOut = store.visible;
     // 布局变了，所有格子位置都要重算
     for (const c of this.cells.values()) this.recycle(c);
     this.cells.clear();
     for (const h of this.heads.values()) h.remove();
     this.heads.clear();
     if (!keepScroll && anchor > 0) this.el.scrollTop = this.layout.pos(anchor)?.y ?? 0;
-    if (prepended) {
-      this.el.scrollTop += this.layout.height - oldH;
+    if (prepended && oldList.length) {
+      // 从眼前那张往后找第一张新列表里还在的（重新加载时，前面接上的相册可能被拿掉了）
+      const now = new Map(store.visible.map((p, i) => [p.path, i]));
+      for (let j = keepIdx; j < oldList.length && j < keepIdx + 400; j++) {
+        const i = now.get(oldList[j].path);
+        if (i === undefined) continue;
+        const y0 = rowTop(oldLayout, j);
+        const y1 = rowTop(this.layout, i);
+        if (y0 !== null && y1 !== null) this.el.scrollTop = y1 - (y0 - oldTop);
+        break;
+      }
       this.lastTop = this.el.scrollTop; // 不算“高速滚动”
     }
     this.update();

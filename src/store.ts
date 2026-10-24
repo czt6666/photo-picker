@@ -11,6 +11,9 @@ import type { Folder, Library, Photo } from './types';
  */
 export type View = { kind: 'folder'; path: string; starredOnly?: boolean } | { kind: 'starred' } | { kind: 'none' };
 
+/** 网格最上面那一栏：有没看过的留言的照片先挪到这里，看完（关掉大图时）回到原来的位置；没有就不显示这一栏 */
+export const UNREAD_SECTION = '\u0000unread';
+
 /** 星标筛选是否开着（侧栏“已加星标的照片”处于按下状态） */
 export const isStarMode = (v: View): boolean => v.kind === 'starred' || (v.kind === 'folder' && !!v.starredOnly);
 
@@ -26,6 +29,8 @@ class Store {
   visible: Photo[] = [];
   /** visible 按相册切成的段 */
   sections: Section[] = [];
+  /** 未读留言那一栏插在哪个相册前面（点开的那个相册） */
+  unreadBefore: string | null = null;
   query = '';
   selection = new Set<string>();
   /** Shift 连选的起点 */
@@ -88,8 +93,19 @@ class Store {
     // 星标筛选下，取消了星标的照片也要消失
     const onlyStar = isStarMode(this.view);
     const match = (p: Photo) => !q || p.name.toLowerCase().includes(q) || p.companions.some((c) => c.toLowerCase().includes(q));
-    this.visible = this.all.filter((p) => (!onlyStar || p.starred) && match(p));
-    this.sections = splitSections(this.visible);
+    const shown = this.all.filter((p) => (!onlyStar || p.starred) && match(p));
+    const unread = shown.filter((p) => p.unread);
+    if (unread.length) {
+      // 未读那一栏放在点开的那个相册上面；往上接的相册排在它前面，往上滑照样能翻到
+      const rest = shown.filter((p) => !p.unread);
+      const at = Math.max(0, this.unreadBefore ? rest.findIndex((p) => p.dir === this.unreadBefore) : 0);
+      this.visible = [...rest.slice(0, at), ...unread, ...rest.slice(at)];
+      const end = at + unread.length;
+      this.sections = splitSections(this.visible.map((p, i) => (i >= at && i < end ? { dir: UNREAD_SECTION } : p)));
+    } else {
+      this.visible = shown;
+      this.sections = splitSections(shown);
+    }
     if (keepSelection) {
       const vis = new Set(this.visible.map((p) => p.path));
       for (const s of [...this.selection]) if (!vis.has(s)) this.selection.delete(s);

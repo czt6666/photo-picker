@@ -243,12 +243,10 @@ class Remote {
   async list(path: string): Promise<Photo[]> {
     const { code, folder } = parseRemotePath(path);
     const photos = this.cache.has(code) && this.sockets.get(code)?.readyState === WebSocket.OPEN ? this.cache.get(code)! : await this.fetch(code);
-    // 有没看过的留言的照片排在最前面（打开相册时排一次；看过之后要到下次打开才回原位，免得正看着照片乱跳）
     return photos
       .filter((p) => p.folder === folder)
       .sort((x, y) => x.name.localeCompare(y.name, undefined, { numeric: true }))
-      .map((p) => this.toPhoto(code, p))
-      .sort((x, y) => Number(!!y.unread) - Number(!!x.unread));
+      .map((p) => this.toPhoto(code, p));
   }
 
   /** 这个远程相册里所有带星标的照片（“已加星标的照片”） */

@@ -28,6 +28,8 @@ const RAPID_MS = 160;
 /** 两次翻页间隔短于它 = 正在“飞”：不预加载（预加载的图转眼就会被跳过，反而占住后台线程） */
 const FLYING_MS = 80;
 const SETTLE_MS = 90;
+/** iPhone 系统动画的曲线（和 CSS 里的 --ios 一样） */
+const IOS_EASE = 'cubic-bezier(0.32, 0.72, 0, 1)';
 const MAX_SCALE = 8;
 
 export interface ViewerCallbacks {
@@ -140,6 +142,7 @@ export class Viewer {
     for (const b of this.dlBtns) b.addEventListener('click', () => void this.download());
     this.buildCommentForm();
     $('.v-sheet').addEventListener('click', (e) => (e.target as HTMLElement).closest('.v-grip') && this.toggleSheet(false));
+    this.bindSheetDrag($('.v-sheet'));
     this.peek = [...root.querySelectorAll<HTMLImageElement>('.v-peek-img')];
 
     $('.v-back').addEventListener('click', () => this.close());
@@ -214,7 +217,7 @@ export class Viewer {
     this.stage.style.transition = 'none';
     this.stage.style.transform = `translate(${dx}px, ${dy}px) scale(${k})`;
     void this.stage.offsetWidth;
-    this.stage.style.transition = 'transform 0.34s cubic-bezier(0.2, 0.9, 0.25, 1)';
+    this.stage.style.transition = `transform 0.42s ${IOS_EASE}`;
     this.stage.style.transform = '';
     window.setTimeout(() => this.root.classList.remove('zooming'), 340);
   }
@@ -722,7 +725,7 @@ export class Viewer {
   private buildCommentForm(): void {
     this.cmtEl.innerHTML = `<div class="v-cmt-head">${esc(t('留言'))}</div><div class="v-cmt-list"></div>
       <form class="v-cmt-form">
-        <label class="v-cmt-as" title="${esc(t('点一下改名字'))}"><span class="v-cmt-avatar"></span><input class="v-cmt-name" maxlength="20" spellcheck="false" autocomplete="off" placeholder="${esc(t('不填就随机起一个'))}">${ICON_PEN}</label>
+        <label class="v-cmt-as"><span>${esc(t('名字'))}</span><input class="v-cmt-name" maxlength="20" spellcheck="false" autocomplete="off" placeholder="${esc(t('不填就随机起一个'))}"></label>
         <div class="v-cmt-row"><textarea rows="1" maxlength="500" placeholder="${esc(t('写留言，大家都能看到'))}"></textarea>
         <button class="v-cmt-send" type="submit" title="${esc(t('发送'))}" disabled>${ICON_SEND}</button></div>
       </form>`;
@@ -731,19 +734,8 @@ export class Viewer {
     const form = this.cmtEl.querySelector('form')!;
     // 名字：默认随机起的那个；改了就记住，清空就再随机一个
     const nameEl = this.cmtEl.querySelector<HTMLInputElement>('.v-cmt-name')!;
-    const avatar = this.cmtEl.querySelector<HTMLElement>('.v-cmt-avatar')!;
-    // 名字框跟着字数变宽，小铅笔紧挨在名字后面（汉字按 1 个字宽，字母数字按半个算）
-    const fitName = () => {
-      const w = [...(nameEl.value || nameEl.placeholder)].reduce((n, ch) => n + (ch.charCodeAt(0) > 0x2e80 ? 1.05 : 0.62), 0.6);
-      nameEl.style.width = `${Math.min(14, w)}em`;
-    };
-    const showName = () => {
-      nameEl.value = remote.commentName;
-      avatar.textContent = [...nameEl.value].pop() ?? '';
-      fitName();
-    };
+    const showName = () => (nameEl.value = remote.commentName);
     showName();
-    nameEl.addEventListener('input', fitName);
     nameEl.addEventListener('keydown', (e) => {
       e.stopPropagation();
       if (e.key === 'Enter' || e.key === 'Escape') nameEl.blur();
@@ -933,6 +925,47 @@ export class Viewer {
   // 放大后单指拖 = 平移；双指捏 = 缩放；连点两下 = 放大 / 还原；轻点一下 = 藏起 / 露出工具栏。
   private touches = new Map<number, { x: number; y: number }>();
   /** 这次手指按下的起点；axis = 认定的方向（动了 10px 以后才定，定了就不改） */
+  /** 面板跟着手指往下拉（像 iPhone 的卡片）：拉得够远或甩一下就收起，否则弹回去 */
+  private dragSheet(dy: number): void {
+    const sheet = this.root.querySelector<HTMLElement>('.v-sheet')!;
+    sheet.style.transition = 'none';
+    // 往上拉只给一点点阻尼，往下跟手
+    sheet.style.transform = `translateY(${dy > 0 ? dy : dy / 6}px)`;
+  }
+
+  private releaseSheet(dy: number, v: number): void {
+    const sheet = this.root.querySelector<HTMLElement>('.v-sheet')!;
+    // 清掉跟手时的内联样式，交给 CSS 的弹性曲线从当前位置接着动
+    sheet.style.transition = '';
+    sheet.style.transform = '';
+    if (dy > Math.min(120, sheet.offsetHeight / 4) || v > 0.5) this.toggleSheet(false);
+  }
+
+  private bindSheetDrag(sheet: HTMLElement): void {
+    let st: { y: number; ly: number; lt: number; v: number; on: boolean } | null = null;
+    sheet.addEventListener('pointerdown', (e) => {
+      if (e.pointerType !== 'touch' || !(e.target as HTMLElement).closest('.v-grip, .v-cmt-head, .v-sheet-title')) return;
+      st = { y: e.clientY, ly: e.clientY, lt: performance.now(), v: 0, on: false };
+    });
+    sheet.addEventListener('pointermove', (e) => {
+      if (!st) return;
+      const now = performance.now();
+      if (now > st.lt) st.v = 0.7 * ((e.clientY - st.ly) / (now - st.lt)) + 0.3 * st.v;
+      st.ly = e.clientY;
+      st.lt = now;
+      const dy = e.clientY - st.y;
+      if (!st.on && Math.abs(dy) > 4) st.on = true;
+      if (st.on) this.dragSheet(dy);
+    });
+    const end = (e: PointerEvent) => {
+      if (!st) return;
+      if (st.on) this.releaseSheet(e.clientY - st.y, st.v);
+      st = null;
+    };
+    sheet.addEventListener('pointerup', end);
+    sheet.addEventListener('pointercancel', end);
+  }
+
   private swipe: { x: number; y: number; t: number; axis: 'x' | 'y' | 'up' | null; vx: number; lx: number; lt: number } | null = null;
   private pinch: { d: number; scale: number } | null = null;
   private lastTap = 0;
@@ -990,6 +1023,8 @@ export class Viewer {
           // 到头了还往外拉：只走三分之一，像拉橡皮筋
           const edge = (dx > 0 && this.index === 0) || (dx < 0 && this.index === this.list.length - 1);
           this.setTrack(edge ? dx / 3 : dx, false);
+        } else if (sw.axis === 'y' && this.root.classList.contains('sheet-open')) {
+          this.dragSheet(dy);
         } else if (sw.axis === 'y' && !this.root.classList.contains('sheet-open')) {
           const k = Math.max(0, dy);
           this.stage.style.transition = 'none';
@@ -1024,7 +1059,7 @@ export class Viewer {
           if (can && (fling || Math.abs(dx) > w / 3)) this.slideTo(d, Math.abs(sw.vx));
           else this.springBack();
         } else if (sw.axis === 'y' && this.root.classList.contains('sheet-open')) {
-          if (dy > 40) this.toggleSheet(false);
+          this.releaseSheet(dy, dt > 0 ? dy / dt : 0);
         } else if (sw.axis === 'y' && this.scale === null) {
           if (dy > 100 || (dt < 300 && dy > 50)) this.swipeClose();
           else this.springBack();
@@ -1103,10 +1138,10 @@ export class Viewer {
   /** 松手没过线：弹回原位 */
   private springBack(): void {
     if (this.swipe?.axis === 'x') {
-      this.setTrack(0, '0.3s cubic-bezier(0.2, 0.9, 0.3, 1)');
+      this.setTrack(0, `0.42s ${IOS_EASE}`);
       window.setTimeout(() => this.hidePeek(), 300);
     } else {
-      this.stage.style.transition = 'transform 0.25s cubic-bezier(0.2, 0.8, 0.2, 1)';
+      this.stage.style.transition = `transform 0.42s ${IOS_EASE}`;
       this.stage.style.transform = '';
     }
     this.root.style.removeProperty('--v-bg');
@@ -1123,7 +1158,7 @@ export class Viewer {
     // 甩得快就滑得快：剩下的距离 / 手速，限制在 160～340ms
     const ms = Math.round(Math.max(160, Math.min(340, speed > 0.1 ? left / speed : 300)));
     this.sliding = true;
-    this.setTrack(-d * w, `${ms}ms cubic-bezier(0.25, 0.9, 0.3, 1)`);
+    this.setTrack(-d * w, `${ms}ms ${IOS_EASE}`);
     window.setTimeout(() => {
       this.step(d);
       this.setTrack(0, false);
@@ -1137,7 +1172,7 @@ export class Viewer {
     const p = this.current;
     const r = p ? (this.cb.thumbRect?.(p.path) ?? null) : null;
     const s = this.stage.getBoundingClientRect();
-    this.stage.style.transition = 'transform 0.26s cubic-bezier(0.3, 0.7, 0.3, 1), opacity 0.26s';
+    this.stage.style.transition = `transform 0.32s ${IOS_EASE}, opacity 0.32s`;
     if (r && r.width && s.width) {
       // 现在的 transform 已经带着手指拖动的位移和缩放：直接换成“落到那一格”的
       const base = this.stage.style.transform;
@@ -1318,8 +1353,6 @@ const ICON_STAR_ON =
   '<svg viewBox="0 0 24 24" width="26" height="26" fill="currentColor" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M12 3.2l2.7 5.6 6.1.8-4.5 4.2 1.1 6.1L12 17l-5.4 2.9 1.1-6.1-4.5-4.2 6.1-.8z"/></svg>';
 const ICON_INFO =
   '<svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="9.2"/><path d="M12 11v6"/><circle cx="12" cy="7.6" r="0.6" fill="currentColor"/></svg>';
-const ICON_PEN =
-  '<svg class="v-cmt-pen" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/></svg>';
 const ICON_SEND =
   '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M6 11l6-6 6 6"/></svg>';
 const ICON_DOWNLOAD =

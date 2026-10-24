@@ -9,7 +9,7 @@ import { closeExportDialog, isExportOpen, openExportDialog } from './exportDialo
 import { Grid } from './grid';
 import { baseName, makeSidebarResizable, Sidebar } from './sidebar';
 import { planRate, planToggle } from './rating';
-import { isStarMode, prefs, store, type View } from './store';
+import { isStarMode, prefs, store, UNREAD_SECTION, type View } from './store';
 import type { Library, Photo, Progress } from './types';
 import { ICONS } from './icons';
 import { LANGS, langPref, setLang, t, translateDom, type Lang } from './i18n';
@@ -76,7 +76,7 @@ const grid = new Grid(gridEl, $('grid-inner'), {
   open: (i) => openViewer(i),
   toggleStar: (photos) => void toggleStar(photos),
   selectionChanged: () => updateStatus(),
-  sectionName: (dir) => store.folder(dir)?.name ?? baseName(dir),
+  sectionName: (dir) => (dir === UNREAD_SECTION ? t('未读留言') : (store.folder(dir)?.name ?? baseName(dir))),
   sectionChanged: (dir) => onSectionAtTop(dir),
   nearEnd: () => void loadNextAlbum(),
   nearStart: () => void loadPrevAlbum(),
@@ -168,6 +168,7 @@ async function showView(view: View, load: () => Promise<Photo[]>): Promise<boole
   chain = view.kind === 'folder' ? [view.path] : [];
   chainEnded = chainStartEnded = false;
   lastChunk = photos;
+  store.unreadBefore = view.kind === 'folder' ? view.path : null;
   store.setPhotos(view, photos);
   if (view.kind === 'folder') lastFolder = view.path;
   prefs.set(`lastView:${store.library.workdir ?? ''}`, view);
@@ -348,8 +349,8 @@ function renderEmpty(): void {
 function updateStatus(): void {
   // 连续翻动时列表里接着好几个相册，张数只报正在看的那个
   const v = store.view;
-  const sec = v.kind === 'folder' ? store.sections.find((s) => s.dir === v.path) : undefined;
-  const shown = sec ? store.visible.slice(sec.start, sec.start + sec.count) : store.visible;
+  // （未读留言那一栏里的照片也算回它自己的相册）
+  const shown = v.kind === 'folder' ? store.visible.filter((p) => p.dir === v.path) : store.visible;
   const total = shown.length;
   const starred = shown.filter((p) => p.starred).length;
   const sel = store.selection.size;
@@ -761,7 +762,7 @@ phone.addEventListener('change', applyCompact);
     inner.style.transformOrigin = `${ox}px ${oy}px`;
     inner.style.transform = `scale(${k})`;
     void inner.offsetWidth;
-    inner.style.transition = 'transform 0.32s cubic-bezier(0.2, 0.9, 0.25, 1)';
+    inner.style.transition = 'transform 0.42s cubic-bezier(0.32, 0.72, 0, 1)';
     inner.style.transform = '';
   };
   const end = (e: TouchEvent) => {
@@ -1127,6 +1128,7 @@ async function reloadRemoteView(): Promise<void> {
   try {
     const photos = v.kind === 'starred' ? await api.listStarred() : await api.listFolder(v.path);
     if (seq !== viewSeq || viewer.opened) return;
+    store.unreadBefore = v.kind === 'folder' ? v.path : null;
     store.all = photos;
     chain = v.kind === 'folder' ? [v.path] : [];
     chainEnded = chainStartEnded = false;

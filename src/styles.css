@@ -28,6 +28,8 @@
 }
 
 :root {
+  /* iPhone 系统动画的曲线：起步快、收尾很软（UIKit 弹簧动画的常用近似） */
+  --ios: cubic-bezier(0.32, 0.72, 0, 1);
   --bg: #1b1c1f;
   --panel: #232529;
   --panel-2: #2b2e33;
@@ -603,7 +605,7 @@ body.drop-target .content::after {
   display: flex;
   flex-direction: column;
   background: rgba(14, 14, 16, var(--v-bg, 1));
-  animation: viewer-in 0.22s cubic-bezier(0.2, 0.8, 0.2, 1);
+  animation: viewer-in 0.22s var(--ios);
 }
 @keyframes viewer-in {
   from {
@@ -1191,7 +1193,7 @@ body.touch .badge {
     width: min(300px, 82vw);
     padding-top: calc(12px + env(safe-area-inset-top));
     transform: translateX(-100%);
-    transition: transform 0.2s ease;
+    transition: transform 0.45s var(--ios);
     box-shadow: 4px 0 30px rgba(0, 0, 0, 0.5);
   }
   body.drawer-open .sidebar {
@@ -1242,7 +1244,7 @@ body.touch .badge {
   opacity: 0;
   transform: translateY(16px);
   pointer-events: none;
-  transition: opacity 0.2s, transform 0.25s cubic-bezier(0.2, 0.8, 0.2, 1);
+  transition: opacity 0.2s, transform 0.25s var(--ios);
 }
 .upload-panel.show {
   opacity: 1;
@@ -1354,7 +1356,7 @@ body.touch .badge {
 .v-top,
 .v-strip,
 .v-info {
-  transition: opacity 0.2s, transform 0.25s cubic-bezier(0.2, 0.8, 0.2, 1);
+  transition: opacity 0.2s, transform 0.25s var(--ios);
 }
 .viewer.bare .v-top {
   opacity: 0;
@@ -1456,7 +1458,7 @@ body.touch .badge {
     background: rgba(14, 14, 16, 0.75);
     backdrop-filter: blur(16px);
     -webkit-backdrop-filter: blur(16px);
-    transition: opacity 0.2s, transform 0.25s cubic-bezier(0.2, 0.8, 0.2, 1);
+    transition: opacity 0.2s, transform 0.25s var(--ios);
   }
   .v-bar button {
     display: grid;
@@ -1507,17 +1509,23 @@ body.touch .badge {
     backdrop-filter: blur(20px);
     -webkit-backdrop-filter: blur(20px);
     transform: translateY(100%);
-    transition: transform 0.32s cubic-bezier(0.2, 0.9, 0.25, 1);
+    transition: transform 0.48s var(--ios);
   }
   .viewer.sheet-open .v-sheet {
     transform: none;
   }
   .viewer.sheet-open .v-stage {
     transform: translateY(-22%) scale(0.8) !important;
-    transition: transform 0.32s cubic-bezier(0.2, 0.9, 0.25, 1) !important;
+    transition: transform 0.48s var(--ios) !important;
   }
   .v-stage {
-    transition: transform 0.32s cubic-bezier(0.2, 0.9, 0.25, 1);
+    transition: transform 0.48s var(--ios);
+  }
+  /* 抓手和标题可以按住往下拉 */
+  .v-grip,
+  .v-cmt-head,
+  .v-sheet-title {
+    touch-action: none;
   }
   .v-grip {
     width: 40px;
@@ -1780,60 +1788,33 @@ body.touch .badge {
   border-color: #e5484d;
 }
 .v-cmt-form {
-  margin-top: 10px;
-  padding: 8px 8px 8px 12px;
-  border-radius: 16px;
-  border: 1px solid var(--border);
-  background: var(--bg);
-  transition: border-color 0.15s;
+  padding-top: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
 }
-.v-cmt-form:focus-within {
-  border-color: rgba(77, 141, 255, 0.6);
-}
-/* 署名：小头像 + 名字，看着是文字，点一下就能改 */
+/* 名字：一行小字 + 一个有底色的小框，点进去就能改 */
 .v-cmt-as {
   display: flex;
   align-items: center;
-  gap: 6px;
-  max-width: 100%;
-  margin-bottom: 4px;
+  gap: 8px;
+  margin-bottom: 8px;
   font-size: 12px;
   color: var(--text-dim);
-  cursor: text;
-}
-.v-cmt-avatar {
-  flex: none;
-  display: grid;
-  place-items: center;
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  background: linear-gradient(135deg, #4d8dff, #8b5cf6);
-  color: #fff;
-  font-size: 11px;
-  font-weight: 600;
 }
 .v-cmt-name {
-  flex: 0 1 auto;
-  min-width: 2em;
-  padding: 2px 0;
-  border: none;
-  border-bottom: 1px dashed transparent;
-  background: none;
+  width: 10em;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.08);
   color: var(--text);
   font: inherit;
-  font-weight: 600;
+  font-size: 13px;
   outline: none;
 }
 .v-cmt-name:focus {
-  border-bottom-color: var(--text-dim);
-}
-.v-cmt-pen {
-  flex: none;
-  opacity: 0.6;
-}
-.v-cmt-as:hover .v-cmt-pen {
-  opacity: 1;
+  border-color: rgba(77, 141, 255, 0.6);
+  background: rgba(255, 255, 255, 0.04);
 }
 .v-cmt-row {
   display: flex;
@@ -1845,13 +1826,17 @@ body.touch .badge {
   resize: none;
   min-height: 34px;
   max-height: 120px;
-  padding: 7px 0;
-  border: none;
-  background: none;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
   color: var(--text);
   font: inherit;
   line-height: 1.4;
   outline: none;
+}
+.v-cmt-row textarea:focus {
+  border-color: rgba(77, 141, 255, 0.6);
 }
 .v-cmt-send {
   flex: none;
@@ -1860,7 +1845,7 @@ body.touch .badge {
   width: 34px;
   height: 34px;
   border: none;
-  border-radius: 50%;
+  border-radius: 8px;
   background: var(--accent);
   color: #fff;
   cursor: pointer;
@@ -1891,7 +1876,7 @@ body.touch .badge {
     box-shadow: -8px 0 30px rgba(0, 0, 0, 0.35);
     transform: translateX(100%);
     visibility: hidden;
-    transition: transform 0.25s cubic-bezier(0.2, 0.9, 0.25, 1), visibility 0.25s;
+    transition: transform 0.45s var(--ios), visibility 0.45s;
   }
   .viewer.sheet-open .v-sheet {
     transform: none;
@@ -2027,12 +2012,12 @@ body.touch .badge {
   box-shadow: 0 8px 30px rgba(0, 0, 0, 0.45);
   cursor: pointer;
   transform: translateX(-50%);
-  animation: banner-in 0.28s cubic-bezier(0.2, 0.9, 0.25, 1);
+  animation: banner-in 0.5s var(--ios);
 }
 .banner.out {
   opacity: 0;
   transform: translate(-50%, -20px);
-  transition: opacity 0.25s, transform 0.25s;
+  transition: opacity 0.3s var(--ios), transform 0.3s var(--ios);
 }
 @keyframes banner-in {
   from {
