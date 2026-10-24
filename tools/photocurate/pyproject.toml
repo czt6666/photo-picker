@@ -1,0 +1,25 @@
+[project]
+name = "photocurate"
+version = "0.1.0"
+description = "给照片打美学分（Aesthetic Predictor V2.5）、分人像 / 有人 / 无人，挑精选和壁纸"
+requires-python = ">=3.10"
+dependencies = [
+  "numpy",
+  "pillow",
+  "pillow-heif",
+  "torch",
+  "open_clip_torch",
+  "aesthetic-predictor-v2-5",
+  "ultralytics",
+  "pyobjc-framework-Vision; sys_platform == 'darwin'",
+]
+
+[project.scripts]
+photocurate = "photocurate.__main__:main"
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["photocurate"]
