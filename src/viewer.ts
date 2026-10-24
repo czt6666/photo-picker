@@ -95,7 +95,6 @@ export class Viewer {
   private posEl: HTMLElement;
   private infoEl: HTMLElement;
   private starBtn: HTMLButtonElement;
-  private zoomBtn: HTMLButtonElement;
   private starMark: HTMLElement;
   /** 手机底栏（学 iPhone 的“照片”）：星标 + 信息 */
   private barStar: HTMLButtonElement;
@@ -122,7 +121,6 @@ export class Viewer {
     this.posEl = $('.v-pos');
     this.infoEl = $('.v-info');
     this.starBtn = $<HTMLButtonElement>('.v-star');
-    this.zoomBtn = $<HTMLButtonElement>('.v-zoom');
     this.starMark = $('.v-starmark');
     this.errorEl = $('.v-error');
     this.strip = new Strip($('.v-strip'), $('.v-strip-inner'), (i) => this.go(i));
@@ -151,7 +149,6 @@ export class Viewer {
       const n = Number((e.target as HTMLElement).closest<HTMLElement>('button')?.dataset.n);
       if (n) void this.rate(n);
     });
-    this.zoomBtn.addEventListener('click', () => this.toggleActualSize());
     $('.v-full').addEventListener('click', () => this.toggleFullscreen());
 
     // 上一张/下一张的悬浮箭头
@@ -594,8 +591,6 @@ export class Viewer {
     }
     const zoomed = this.scale !== null && this.scale > this.fitScale() * 1.001;
     this.stage.classList.toggle('zoomed', zoomed);
-    const dpr = window.devicePixelRatio || 1;
-    this.zoomBtn.textContent = this.scale === null ? '1:1' : `${Math.round(s * dpr * 100)}%`;
   }
 
   /** 当前的放大倍数和看的位置（平移量换算成占显示尺寸的比例，换了尺寸不同的图也指向同一处） */
@@ -726,11 +721,23 @@ export class Viewer {
   /** 留言区：上面是列表，下面是输入框 + 发送 */
   private buildCommentForm(): void {
     this.cmtEl.innerHTML = `<div class="v-cmt-head">${esc(t('留言'))}</div><div class="v-cmt-list"></div>
+      <label class="v-cmt-namerow"><span class="dim">${esc(t('名字'))}</span><input class="v-cmt-name" maxlength="20" spellcheck="false" autocomplete="off" placeholder="${esc(t('不填就随机起一个'))}"></label>
       <form class="v-cmt-form"><textarea rows="1" maxlength="500" placeholder="${esc(t('写留言，大家都能看到'))}"></textarea>
       <button class="btn primary" type="submit">${esc(t('发送'))}</button></form>`;
     this.cmtList = this.cmtEl.querySelector('.v-cmt-list')!;
     this.cmtInput = this.cmtEl.querySelector('textarea')!;
     const form = this.cmtEl.querySelector('form')!;
+    // 名字：默认随机起的那个；改了就记住，清空就再随机一个
+    const nameEl = this.cmtEl.querySelector<HTMLInputElement>('.v-cmt-name')!;
+    nameEl.value = remote.commentName;
+    nameEl.addEventListener('keydown', (e) => {
+      e.stopPropagation();
+      if (e.key === 'Enter' || e.key === 'Escape') nameEl.blur();
+    });
+    nameEl.addEventListener('change', () => {
+      remote.commentName = nameEl.value;
+      nameEl.value = remote.commentName;
+    });
     const grow = () => {
       this.cmtInput.style.height = 'auto';
       this.cmtInput.style.height = `${Math.min(120, this.cmtInput.scrollHeight)}px`;
@@ -790,8 +797,17 @@ export class Viewer {
     for (const b of this.dlBtns) b.hidden = !on || isTauri;
     this.cmtBtn.innerHTML = `${ICONS.bubble}<span>${n || t('留言')}</span>`;
     this.barCmt.innerHTML = `${ICON_BUBBLE}${n ? `<span class="n">${n}</span>` : ''}`;
+    if (p?.remote) p.unread = remote.unreadCount(p.remote.code, p.remote.id);
+    this.refreshUnread();
     if (!on && this.sheetMode === 'comments') this.toggleSheet(false, 'info');
     if (this.sheetMode === 'comments') this.renderComments(false);
+  }
+
+  /** 有没看过的留言：留言按钮标红 */
+  private refreshUnread(): void {
+    const u = !!this.current?.unread;
+    this.cmtBtn.classList.toggle('unread', u);
+    this.barCmt.classList.toggle('unread', u);
   }
 
   /**
@@ -839,7 +855,8 @@ export class Viewer {
             text.textContent = c.text;
             const meta = document.createElement('div');
             meta.className = 'v-cmt-meta';
-            meta.textContent = timeAgo(c.at);
+            if (c.name) meta.append(Object.assign(document.createElement('span'), { className: 'v-cmt-who', textContent: c.name }));
+            meta.append(timeAgo(c.at));
             if (remote.canDelete(p.remote!.code, c.id)) {
               const del = document.createElement('button');
               del.className = 'v-cmt-del';
@@ -853,6 +870,12 @@ export class Viewer {
         : [Object.assign(document.createElement('div'), { className: 'v-cmt-empty dim', textContent: t('还没有留言') })]),
     );
     if (atBottom || focus) this.cmtList.scrollTop = this.cmtList.scrollHeight;
+    // 留言栏开着 = 看过了，这张的未读清零
+    if (this.root.classList.contains('sheet-open') && this.sheetMode === 'comments' && p.unread) {
+      remote.markCommentsSeen(p.remote.code, p.remote.id);
+      p.unread = 0;
+      this.refreshUnread();
+    }
     // 电脑上点开就能直接打字；手机上不自动弹键盘（会把照片顶没了）
     // （等面板滑出来再聚焦：隐藏着的输入框聚焦不了）
     if (focus && !this.byTouch) window.setTimeout(() => this.cmtInput.focus({ preventScroll: true }), 60);

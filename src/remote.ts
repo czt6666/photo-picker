@@ -7,7 +7,7 @@
 // 是相册 `remote:<相册码>/<文件夹>`，照片是 `remote:<相册码>#<id>`。
 // api.ts 看到这种路径就转到这里，其它界面代码基本不用知道区别。
 
-import { t } from './i18n';
+import { lang, t } from './i18n';
 import { isWeb } from './platform';
 import { prefs } from './store';
 import type { Folder, Library, Photo } from './types';
@@ -68,6 +68,8 @@ export interface ServerPhoto {
 export interface ServerComment {
   id: number;
   photo_id: number;
+  /** 留言人自己起的名字（老留言没有，是空串） */
+  name: string;
   text: string;
   /** 秒 */
   at: number;
@@ -128,6 +130,8 @@ class Remote {
   private comments = new Map<string, ServerComment[]>();
   /** 自己留言时拿到的删除口令：`相册码:留言id` → 口令（只有这台设备能删自己的留言） */
   private commentTokens = prefs.get<Record<string, string>>('remote.commentTokens', {});
+  /** 每张照片看过的最新一条留言 id（`相册码:照片id` → 留言 id），比它新的、别人留的算未读 */
+  private seenComments = prefs.get<Record<string, number>>('remote.seenComments', {});
   /** 谁正在看 */
   presence = new Map<string, string[]>();
   private sockets = new Map<string, WebSocket>();
@@ -263,6 +267,7 @@ class Remote {
       companions: p.companions,
       starredBy: p.starred_by,
       comments: this.commentCount(code, p.id),
+      unread: this.unreadCount(code, p.id),
       remote: {
         code,
         id: p.id,
@@ -409,15 +414,47 @@ class Remote {
     return n;
   }
 
+  /** 留言署名：第一次用时随机起一个，之后一直用它，除非自己改 */
+  get commentName(): string {
+    let n = prefs.get<string>('remote.commentName', '');
+    if (!n) prefs.set('remote.commentName', (n = randomName()));
+    return n;
+  }
+
+  /** 改名；清空就重新随机一个 */
+  set commentName(v: string) {
+    prefs.set('remote.commentName', v.trim().slice(0, 20) || randomName());
+  }
+
   async addComment(path: string, text: string): Promise<ServerComment> {
     const { code, id } = parseRemotePath(path);
     const a = this.get(code);
     if (!a || id === null) throw new RemoteError(t('没有连接这个远程相册'), 404);
-    const r = await this.call<{ comment: ServerComment; token: string }>(a, 'POST', `/albums/${code}/photos/${id}/comments`, { text });
+    const body = { name: this.commentName, text };
+    const r = await this.call<{ comment: ServerComment; token: string }>(a, 'POST', `/albums/${code}/photos/${id}/comments`, body);
     this.commentTokens[`${code}:${r.comment.id}`] = r.token;
     prefs.set('remote.commentTokens', this.commentTokens);
     this.applyComment(code, r.comment);
     return r.comment;
+  }
+
+  /** 这张照片下别人留的、还没看过的留言条数 */
+  unreadCount(code: string, photoId: number): number {
+    const seen = this.seenComments[`${code}:${photoId}`] ?? 0;
+    let n = 0;
+    for (const c of this.comments.get(code) ?? [])
+      if (c.photo_id === photoId && c.id > seen && !this.commentTokens[`${code}:${c.id}`]) n++;
+    return n;
+  }
+
+  /** 看过这张照片的留言了 */
+  markCommentsSeen(code: string, photoId: number): void {
+    const key = `${code}:${photoId}`;
+    let max = this.seenComments[key] ?? 0;
+    for (const c of this.comments.get(code) ?? []) if (c.photo_id === photoId && c.id > max) max = c.id;
+    if (max === (this.seenComments[key] ?? 0)) return;
+    this.seenComments[key] = max;
+    prefs.set('remote.seenComments', this.seenComments);
   }
 
   /** 自己留的，或者自己是相册创建者，才能删 */
@@ -535,3 +572,14 @@ export function photoKey(folder: string, name: string): string {
 }
 
 export const remote = new Remote();
+
+const NAME_ADJ = ['快乐', '安静', '勇敢', '好奇', '温柔', '机灵', '淡定', '开心', '认真', '可爱', '自在', '爱笑'];
+const NAME_ANIMAL = ['小鹿', '熊猫', '海豚', '狐狸', '松鼠', '企鹅', '柯基', '橘猫', '考拉', '水獭', '刺猬', '鲸鱼'];
+const NAME_ADJ_EN = ['Happy', 'Quiet', 'Brave', 'Curious', 'Gentle', 'Clever', 'Calm', 'Sunny', 'Lucky', 'Cozy', 'Witty', 'Merry'];
+const NAME_ANIMAL_EN = ['Deer', 'Panda', 'Dolphin', 'Fox', 'Squirrel', 'Penguin', 'Corgi', 'Cat', 'Koala', 'Otter', 'Hedgehog', 'Whale'];
+
+/** 随机名字：「好奇的水獭」/ Curious Otter */
+function randomName(): string {
+  const pick = <T>(a: T[]) => a[Math.floor(Math.random() * a.length)];
+  return lang === 'zh' ? `${pick(NAME_ADJ)}的${pick(NAME_ANIMAL)}` : `${pick(NAME_ADJ_EN)} ${pick(NAME_ANIMAL_EN)}`;
+}

@@ -228,11 +228,12 @@ async fn anyone_with_link_can_comment() {
     assert_eq!(s, 400);
     let (s, _) = call(&srv, "POST", &format!("/api/albums/{code}/photos/99999/comments"), &[], Some(json!({ "text": "x" }))).await;
     assert_eq!(s, 404);
-    let (s, v) = call(&srv, "POST", &url, &[], Some(json!({ "text": " 这张脸修瘦一点\n背景去掉路人 " }))).await;
+    let (s, v) = call(&srv, "POST", &url, &[], Some(json!({ "name": " 小鹿 ", "text": " 这张脸修瘦一点\n背景去掉路人 " }))).await;
     assert_eq!(s, 200, "{v}");
     let c1 = v["comment"]["id"].as_i64().unwrap();
     let mine = v["token"].as_str().unwrap().to_string();
     assert_eq!(v["comment"]["text"], "这张脸修瘦一点\n背景去掉路人");
+    assert_eq!(v["comment"]["name"], "小鹿");
     let ev = next_json(&mut ws, "comment").await;
     assert_eq!(ev["comment"]["photo_id"], p1);
     let (_, v) = call(&srv, "POST", &url, &[], Some(json!({ "text": "第二条" }))).await;

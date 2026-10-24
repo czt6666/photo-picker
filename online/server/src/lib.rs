@@ -514,6 +514,8 @@ const COMMENT_MAX: usize = 500;
 
 #[derive(Deserialize)]
 struct NewComment {
+    #[serde(default)]
+    name: String,
     text: String,
 }
 
@@ -532,7 +534,8 @@ async fn add_comment(
     if text.chars().count() > COMMENT_MAX {
         return Err(ApiError::bad(format!("留言太长了（最多 {COMMENT_MAX} 字）")));
     }
-    let Some((comment, token)) = st.db.add_comment(&a.id, photo_id, &text)? else {
+    let name: String = req.name.trim().chars().filter(|c| !c.is_control()).take(NAME_MAX).collect();
+    let Some((comment, token)) = st.db.add_comment(&a.id, photo_id, &name, &text)? else {
         return Err(ApiError::new(StatusCode::NOT_FOUND, "这张照片不在相册里"));
     };
     st.hub.send(&a.id, json!({ "type": "comment", "comment": comment }));

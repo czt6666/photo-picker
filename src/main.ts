@@ -981,7 +981,11 @@ function onRemoteEvent(code: string, ev: RemoteEvent): void {
     }
   } else if (ev.type === 'comment' || ev.type === 'comment_deleted') {
     // 留言数显示在格子上，看大图时留言列表跟着刷新
-    for (const p of store.all) if (p.remote?.code === code) p.comments = remote.commentCount(code, p.remote.id);
+    for (const p of store.all)
+      if (p.remote?.code === code) {
+        p.comments = remote.commentCount(code, p.remote.id);
+        p.unread = remote.unreadCount(code, p.remote.id);
+      }
     grid.refreshCells();
     viewer.refreshComments();
   } else if (ev.type === 'presence') {

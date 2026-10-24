@@ -1762,6 +1762,40 @@ body.touch .badge {
 .v-cmt-empty {
   padding: 14px 0;
 }
+.v-cmt-namerow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 10px;
+  font-size: 12px;
+}
+.v-cmt-name {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  padding: 0 8px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+}
+.v-cmt-who {
+  color: var(--text);
+  font-weight: 600;
+  margin-right: 6px;
+}
+/* 有没看过的留言：红色 */
+.cmt.unread {
+  background: #e5484d;
+}
+.v-cmtbtn.unread {
+  color: #ff5a5f;
+}
+.v-cmtbtn.unread {
+  border-color: #e5484d;
+}
 .v-cmt-form {
   display: flex;
   align-items: flex-end;
@@ -1851,6 +1885,9 @@ body.touch .badge {
     line-height: 16px;
     color: #fff;
     background: var(--accent);
+  }
+  .v-bcmt.unread .n {
+    background: #e5484d;
   }
   .viewer.sheet-open.sheet-comments .v-bcmt {
     color: var(--accent);

@@ -67,7 +67,6 @@ export const EN: Record<string, string> = {
   '导出': 'Export',
   '← 图库': '← Library',
   '返回（Esc）': 'Back (Esc)',
-  '1:1 / 适合窗口（Z 或双击）': '1:1 / Fit (Z or double-click)',
   '星级（1～5，0 清除）': 'Rating (1–5, 0 clears)',
   '全屏（F）': 'Full screen (F)',
 
@@ -276,6 +275,8 @@ export const EN: Record<string, string> = {
   "发送": "Send",
   "删除该相册": "Delete this album",
   "从相册里删除": "Delete from album",
+  "名字": "Name",
+  "不填就随机起一个": "Leave empty for a random one",
   "下载失败，检查一下网络": "Download failed. Check your connection.",
   "下载（长边 1600 像素）": "Download (1600 px)",
   "下载": "Download",

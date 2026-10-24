@@ -447,6 +447,7 @@ export class Grid {
     const n = p.comments ? String(p.comments) : '';
     if (cmt.textContent !== n) cmt.innerHTML = n ? `${ICONS.bubble}${n}` : '';
     cmt.hidden = !n;
+    cmt.classList.toggle('unread', !!p.unread);
   }
 
   private recycle(c: HTMLElement): void {

@@ -43,6 +43,7 @@ CREATE TABLE IF NOT EXISTS stars (
 CREATE TABLE IF NOT EXISTS comments (
   id       INTEGER PRIMARY KEY AUTOINCREMENT,
   photo_id INTEGER NOT NULL REFERENCES photos(id) ON DELETE CASCADE,
+  name     TEXT NOT NULL DEFAULT '',
   text     TEXT NOT NULL,
   token    TEXT NOT NULL,
   at       INTEGER NOT NULL
@@ -96,11 +97,12 @@ pub struct Photo {
     pub starred_by: Option<String>,
 }
 
-/// 一条留言：挂在某张照片下面，不记名字（和星标一样，拿到链接的人都能留）
+/// 一条留言：挂在某张照片下面，拿到链接的人都能留。名字是留言的人自己填的（不填前端随机起一个），不做校验
 #[derive(Debug, Clone, Serialize)]
 pub struct Comment {
     pub id: i64,
     pub photo_id: i64,
+    pub name: String,
     pub text: String,
     pub at: i64,
 }
@@ -159,6 +161,14 @@ impl Db {
     pub fn open(path: &Path) -> R<Db> {
         let conn = Connection::open(path).map_err(e)?;
         conn.execute_batch(SCHEMA).map_err(e)?;
+        // v0.4.0 的留言表没有 name 列，老库补上
+        let has_name: bool = conn
+            .query_row("SELECT COUNT(*) FROM pragma_table_info('comments') WHERE name = 'name'", [], |r| r.get::<_, i64>(0))
+            .map_err(e)?
+            > 0;
+        if !has_name {
+            conn.execute_batch("ALTER TABLE comments ADD COLUMN name TEXT NOT NULL DEFAULT ''").map_err(e)?;
+        }
         Ok(Db { conn: Mutex::new(conn) })
     }
 
@@ -281,19 +291,19 @@ impl Db {
         let c = self.conn.lock();
         let mut st = c
             .prepare(
-                "SELECT c.id, c.photo_id, c.text, c.at FROM comments c JOIN photos p ON p.id = c.photo_id
+                "SELECT c.id, c.photo_id, c.name, c.text, c.at FROM comments c JOIN photos p ON p.id = c.photo_id
                  WHERE p.album_id = ?1 ORDER BY c.id",
             )
             .map_err(e)?;
         let rows = st
-            .query_map([album_id], |r| Ok(Comment { id: r.get(0)?, photo_id: r.get(1)?, text: r.get(2)?, at: r.get(3)? }))
+            .query_map([album_id], |r| Ok(Comment { id: r.get(0)?, photo_id: r.get(1)?, name: r.get(2)?, text: r.get(3)?, at: r.get(4)? }))
             .map_err(e)?;
         rows.collect::<Result<_, _>>().map_err(e)
     }
 
     /// 留言。返回这条留言和它的删除口令（只有留言的那台设备拿得到，用来删自己的留言）。
     /// 照片不属于这个相册就返回 None。
-    pub fn add_comment(&self, album_id: &str, photo_id: i64, text: &str) -> R<Option<(Comment, String)>> {
+    pub fn add_comment(&self, album_id: &str, photo_id: i64, name: &str, text: &str) -> R<Option<(Comment, String)>> {
         let c = self.conn.lock();
         let belongs = c
             .query_row("SELECT 1 FROM photos WHERE album_id = ?1 AND id = ?2", params![album_id, photo_id], |_| Ok(()))
@@ -305,9 +315,12 @@ impl Db {
         }
         let token = random_string(ID_ALPHABET, 20);
         let at = now();
-        c.execute("INSERT INTO comments (photo_id, text, token, at) VALUES (?1, ?2, ?3, ?4)", params![photo_id, text, token, at])
-            .map_err(e)?;
-        Ok(Some((Comment { id: c.last_insert_rowid(), photo_id, text: text.to_string(), at }, token)))
+        c.execute(
+            "INSERT INTO comments (photo_id, name, text, token, at) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![photo_id, name, text, token, at],
+        )
+        .map_err(e)?;
+        Ok(Some((Comment { id: c.last_insert_rowid(), photo_id, name: name.to_string(), text: text.to_string(), at }, token)))
     }
 
     /// 删留言：留言的人（拿删除口令）或相册创建者（as_owner）可以删。返回是否删到了

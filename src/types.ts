@@ -16,6 +16,8 @@ export interface Photo {
   starredBy?: string | null;
   /** 远程相册里的照片：有几条留言 */
   comments?: number;
+  /** 其中别人留的、这台设备还没看过的 */
+  unread?: number;
   /** 远程相册里的照片才有 */
   remote?: RemoteRef;
 }
