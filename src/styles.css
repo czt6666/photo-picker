@@ -1119,10 +1119,15 @@ body.drop-target .content::after {
   touch-action: none;
 }
 
-/* 网页版：没有本地图库，藏掉本地才有的按钮 */
-body.web #btn-rescan,
+/* 网页版：没有本地图库，藏掉本地才有的按钮（刷新留着，远程相册用它拉最新） */
 body.web #btn-export {
   display: none;
+}
+/* 手机顶栏地方小，星标本来就实时同步，刷新就不放了 */
+@media (max-width: 760px) {
+  body.web #btn-rescan {
+    display: none;
+  }
 }
 
 /* 手机/平板：触屏没有悬停，星标按钮一直露出来，好点 */
@@ -1842,17 +1847,13 @@ body.touch .badge {
   }
 }
 
-/* 工作目录按钮 + 分享按钮一起占满侧栏那么宽 */
+/* 工作目录按钮 + 刷新按钮一起占满侧栏那么宽；分享按钮在标题左边 */
 .toolbar .btn.workdir {
   justify-content: flex-start;
 }
 .btn.workdir .label {
   flex: 1;
   text-align: left;
-}
-.tb-side .btn.share {
-  flex: none;
-  margin-left: 0;
 }
 
 /* 菜单：图标、当前项、红色的危险操作、行尾小按钮 */
