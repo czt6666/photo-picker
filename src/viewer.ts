@@ -103,6 +103,7 @@ export class Viewer {
   /** 留言：看大图顶栏的按钮（电脑）、底栏的按钮（手机）、面板 */
   private cmtBtn: HTMLButtonElement;
   private barCmt: HTMLButtonElement;
+  private dlBtns: HTMLButtonElement[];
   private cmtEl: HTMLElement;
   /** 左右滑时露出来的前一张 / 后一张 */
   private peek: HTMLImageElement[];
@@ -135,6 +136,10 @@ export class Viewer {
     this.barCmt = $<HTMLButtonElement>('.v-bcmt');
     this.cmtEl = $('.v-comments');
     for (const b of [this.cmtBtn, this.barCmt]) b.addEventListener('click', () => this.toggleSheet(undefined, 'comments'));
+    this.dlBtns = [$<HTMLButtonElement>('.v-dl'), $<HTMLButtonElement>('.v-bdl')];
+    this.dlBtns[0].innerHTML = ICONS.download;
+    this.dlBtns[1].innerHTML = ICON_DOWNLOAD;
+    for (const b of this.dlBtns) b.addEventListener('click', () => void this.download());
     this.buildCommentForm();
     $('.v-sheet').addEventListener('click', (e) => (e.target as HTMLElement).closest('.v-grip') && this.toggleSheet(false));
     this.peek = [...root.querySelectorAll<HTMLImageElement>('.v-peek-img')];
@@ -781,10 +786,42 @@ export class Viewer {
     const on = !!p?.remote;
     const n = on ? remote.commentsOf(p!.path).length : 0;
     this.cmtBtn.hidden = this.barCmt.hidden = !on;
+    // 桌面版有导出（远程相册导出的是本机原图），下载只给网页版
+    for (const b of this.dlBtns) b.hidden = !on || isTauri;
     this.cmtBtn.innerHTML = `${ICONS.bubble}<span>${n || t('留言')}</span>`;
     this.barCmt.innerHTML = `${ICON_BUBBLE}${n ? `<span class="n">${n}</span>` : ''}`;
     if (!on && this.sheetMode === 'comments') this.toggleSheet(false, 'info');
     if (this.sheetMode === 'comments') this.renderComments(false);
+  }
+
+  /**
+   * 下载线上那张预览图（长边 1600 像素，不是原图），文件名沿用原图的名字。
+   * 手机上走系统分享面板，能直接「存储图像」到相册；电脑上就是普通下载。
+   */
+  private async download(): Promise<void> {
+    const p = this.current;
+    if (!p?.remote) return;
+    const name = p.name.replace(/\.[^.]+$/, '') + '.jpg';
+    try {
+      const blob = await (await fetch(`${p.remote.img}_p.jpg`)).blob();
+      const file = new File([blob], name, { type: 'image/jpeg' });
+      if (navigator.maxTouchPoints > 0 && navigator.canShare?.({ files: [file] })) {
+        try {
+          await navigator.share({ files: [file] });
+          return;
+        } catch (e) {
+          if ((e as Error).name === 'AbortError') return; // 用户自己关了分享面板
+        }
+      }
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = name;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 10_000);
+    } catch {
+      toast(t('下载失败，检查一下网络'), 'error');
+    }
   }
 
   private renderComments(focus: boolean): void {
@@ -1236,6 +1273,8 @@ const ICON_STAR_ON =
   '<svg viewBox="0 0 24 24" width="26" height="26" fill="currentColor" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M12 3.2l2.7 5.6 6.1.8-4.5 4.2 1.1 6.1L12 17l-5.4 2.9 1.1-6.1-4.5-4.2 6.1-.8z"/></svg>';
 const ICON_INFO =
   '<svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="9.2"/><path d="M12 11v6"/><circle cx="12" cy="7.6" r="0.6" fill="currentColor"/></svg>';
+const ICON_DOWNLOAD =
+  '<svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5v12M7 10.8l5 4.9 5-4.9"/><path d="M4.5 19.5h15"/></svg>';
 const ICON_BUBBLE =
   '<svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M20 12a8 8 0 0 1-11.6 7.1L4 20l1-4.2A8 8 0 1 1 20 12z"/></svg>';
 

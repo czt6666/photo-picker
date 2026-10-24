@@ -1703,7 +1703,9 @@ body.touch .badge {
   gap: 5px;
 }
 .v-cmtbtn[hidden],
-.v-bcmt[hidden] {
+.v-bcmt[hidden],
+.v-dl[hidden],
+.v-bdl[hidden] {
   display: none !important;
 }
 .viewer.sheet-open.sheet-comments .v-cmtbtn {
