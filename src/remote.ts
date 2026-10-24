@@ -12,12 +12,13 @@ import { isWeb } from './platform';
 import { prefs } from './store';
 import type { Folder, Library, Photo } from './types';
 
-/** 远程相册服务器（网页和接口都在这个路径下）。不让用户配：本地调试连本机，发布版连正式服务器，网页版就是打开它的那台 */
+/**
+ * 远程相册服务器（网页和接口都在这个路径下）。不让用户配：桌面版（调试版也一样）连正式服务器，网页版就是打开它的那台。
+ * 开发时要连本机的服务器，启动前设环境变量 VITE_REMOTE_SERVER=http://localhost:8081。
+ */
 export const SERVER = isWeb
   ? (globalThis.location?.origin ?? '') + import.meta.env.BASE_URL.replace(/\/$/, '')
-  : import.meta.env.DEV
-    ? 'http://localhost:8081'
-    : 'https://czt666.cn/photo-picker';
+  : ((import.meta.env.VITE_REMOTE_SERVER as string | undefined) ?? 'https://czt666.cn/photo-picker');
 
 export const REMOTE = 'remote:';
 export const isRemotePath = (p: string): boolean => p.startsWith(REMOTE);
