@@ -721,28 +721,46 @@ export class Viewer {
   /** 留言区：上面是列表，下面是输入框 + 发送 */
   private buildCommentForm(): void {
     this.cmtEl.innerHTML = `<div class="v-cmt-head">${esc(t('留言'))}</div><div class="v-cmt-list"></div>
-      <label class="v-cmt-namerow"><span class="dim">${esc(t('名字'))}</span><input class="v-cmt-name" maxlength="20" spellcheck="false" autocomplete="off" placeholder="${esc(t('不填就随机起一个'))}"></label>
-      <form class="v-cmt-form"><textarea rows="1" maxlength="500" placeholder="${esc(t('写留言，大家都能看到'))}"></textarea>
-      <button class="btn primary" type="submit">${esc(t('发送'))}</button></form>`;
+      <form class="v-cmt-form">
+        <label class="v-cmt-as" title="${esc(t('点一下改名字'))}"><span class="v-cmt-avatar"></span><input class="v-cmt-name" maxlength="20" spellcheck="false" autocomplete="off" placeholder="${esc(t('不填就随机起一个'))}">${ICON_PEN}</label>
+        <div class="v-cmt-row"><textarea rows="1" maxlength="500" placeholder="${esc(t('写留言，大家都能看到'))}"></textarea>
+        <button class="v-cmt-send" type="submit" title="${esc(t('发送'))}" disabled>${ICON_SEND}</button></div>
+      </form>`;
     this.cmtList = this.cmtEl.querySelector('.v-cmt-list')!;
     this.cmtInput = this.cmtEl.querySelector('textarea')!;
     const form = this.cmtEl.querySelector('form')!;
     // 名字：默认随机起的那个；改了就记住，清空就再随机一个
     const nameEl = this.cmtEl.querySelector<HTMLInputElement>('.v-cmt-name')!;
-    nameEl.value = remote.commentName;
+    const avatar = this.cmtEl.querySelector<HTMLElement>('.v-cmt-avatar')!;
+    // 名字框跟着字数变宽，小铅笔紧挨在名字后面（汉字按 1 个字宽，字母数字按半个算）
+    const fitName = () => {
+      const w = [...(nameEl.value || nameEl.placeholder)].reduce((n, ch) => n + (ch.charCodeAt(0) > 0x2e80 ? 1.05 : 0.62), 0.6);
+      nameEl.style.width = `${Math.min(14, w)}em`;
+    };
+    const showName = () => {
+      nameEl.value = remote.commentName;
+      avatar.textContent = [...nameEl.value].pop() ?? '';
+      fitName();
+    };
+    showName();
+    nameEl.addEventListener('input', fitName);
     nameEl.addEventListener('keydown', (e) => {
       e.stopPropagation();
       if (e.key === 'Enter' || e.key === 'Escape') nameEl.blur();
     });
     nameEl.addEventListener('change', () => {
       remote.commentName = nameEl.value;
-      nameEl.value = remote.commentName;
+      showName();
     });
+    const sendBtn = form.querySelector<HTMLButtonElement>('.v-cmt-send')!;
     const grow = () => {
       this.cmtInput.style.height = 'auto';
       this.cmtInput.style.height = `${Math.min(120, this.cmtInput.scrollHeight)}px`;
     };
-    this.cmtInput.addEventListener('input', grow);
+    this.cmtInput.addEventListener('input', () => {
+      grow();
+      sendBtn.disabled = !this.cmtInput.value.trim();
+    });
     // 回车发送，Shift+回车换行；输入法选字时的回车不算
     this.cmtInput.addEventListener('keydown', (e) => {
       e.stopPropagation(); // 打字时空格、方向键不能翻页 / 加星
@@ -758,8 +776,7 @@ export class Viewer {
       const p = this.current;
       const text = this.cmtInput.value.trim();
       if (!p?.remote || !text) return;
-      const btn = form.querySelector('button')!;
-      btn.disabled = true;
+      sendBtn.disabled = true;
       try {
         await remote.addComment(p.path, text);
         this.cmtInput.value = '';
@@ -770,7 +787,7 @@ export class Viewer {
       } catch (err) {
         toast(err instanceof Error ? err.message : String(err), 'error');
       } finally {
-        btn.disabled = false;
+        sendBtn.disabled = !this.cmtInput.value.trim();
       }
     });
     this.cmtList.addEventListener('click', async (e) => {
@@ -1301,6 +1318,10 @@ const ICON_STAR_ON =
   '<svg viewBox="0 0 24 24" width="26" height="26" fill="currentColor" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M12 3.2l2.7 5.6 6.1.8-4.5 4.2 1.1 6.1L12 17l-5.4 2.9 1.1-6.1-4.5-4.2 6.1-.8z"/></svg>';
 const ICON_INFO =
   '<svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="9.2"/><path d="M12 11v6"/><circle cx="12" cy="7.6" r="0.6" fill="currentColor"/></svg>';
+const ICON_PEN =
+  '<svg class="v-cmt-pen" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/></svg>';
+const ICON_SEND =
+  '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M6 11l6-6 6 6"/></svg>';
 const ICON_DOWNLOAD =
   '<svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5v12M7 10.8l5 4.9 5-4.9"/><path d="M4.5 19.5h15"/></svg>';
 const ICON_BUBBLE =

@@ -69,7 +69,6 @@ const emptyEl = $('empty');
 const titleEl = $('view-title');
 const countEl = $('status-count');
 const thumbsEl = $('status-thumbs');
-const starBtn = $<HTMLButtonElement>('btn-star');
 const zoom = $<HTMLInputElement>('zoom');
 const search = $<HTMLInputElement>('search');
 
@@ -361,11 +360,6 @@ function updateStatus(): void {
     s += `  ·  ${t('已选 {n} 张（{size}）', { n: sel, size: formatBytes(bytes) })}`;
   }
   countEl.textContent = s;
-  const targets = starTargets();
-  starBtn.disabled = !targets.length;
-  const allStarred = targets.length > 0 && targets.every((p) => p.starred);
-  starBtn.textContent = allStarred ? t('★ 取消星标') : t('☆ 加星标');
-  starBtn.classList.toggle('on', allStarred);
 }
 
 // ---------------------------------------------------------------------------
@@ -647,7 +641,6 @@ workdirBtn.addEventListener('click', () => {
 });
 $('btn-rescan').addEventListener('click', () => void rescan());
 $('btn-export').addEventListener('click', () => openExportDialog(onMoved));
-starBtn.addEventListener('click', () => void toggleStar(starTargets()));
 
 /**
  * 点侧栏“已加星标的照片”或按 Shift+S：星标筛选开 / 关。
@@ -1029,7 +1022,7 @@ async function deleteFromAlbum(a: RemoteAlbum, photos: Photo[]): Promise<void> {
   }
 }
 
-/** 当前远程相册的管理菜单项：继续上传、从相册里删除、删除该相册（都只有创建者有） */
+/** 当前远程相册的管理菜单项：继续上传、从相册里删除（都只有创建者有）。删除整个相册先关掉了 */
 function remoteItems(a: RemoteAlbum): MenuItem[] {
   const code = a.code;
   const owner = !!a.ownerToken;
@@ -1045,19 +1038,6 @@ function remoteItems(a: RemoteAlbum): MenuItem[] {
             detail: sel.length ? t('{n} 张', { n: sel.length }) : '',
             disabled: !sel.length,
             action: () => void deleteFromAlbum(a, sel),
-          },
-          {
-            label: t('删除该相册'),
-            danger: true,
-            action: async () => {
-              if (!(await confirmBox(t('删除远程相册「{name}」？', { name: a.name }), t('线上图片、星标和留言都会删掉，原图不受影响'), t('删除')))) return;
-              try {
-                await remote.destroy(code);
-                await forgetRemote(code);
-              } catch (e) {
-                toast(String(e), 'error');
-              }
-            },
           },
         ]
       : []),
@@ -1277,6 +1257,8 @@ async function boot(): Promise<void> {
   if (remote.active) remote.activate(remote.active); // 挂上实时通道
   setLibrary(lib);
   await openInitialView(lib);
+  // 上次开着的远程相册（网页版打开过链接后，地址就变回首页了，再进来走的是这里）
+  if (remote.active) notifyUnreadOnOpen(remote.active);
   gridEl.focus({ preventScroll: true });
 }
 

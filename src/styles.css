@@ -1762,25 +1762,7 @@ body.touch .badge {
 }
 .v-cmt-empty {
   padding: 14px 0;
-}
-.v-cmt-namerow {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding-top: 10px;
-  font-size: 12px;
-}
-.v-cmt-name {
-  flex: 1;
-  min-width: 0;
-  height: 28px;
-  padding: 0 8px;
-  border-radius: 8px;
-  border: 1px solid var(--border);
-  background: var(--bg);
-  color: var(--text);
-  font: inherit;
-  font-size: 13px;
+  text-align: center;
 }
 .v-cmt-who {
   color: var(--text);
@@ -1798,26 +1780,98 @@ body.touch .badge {
   border-color: #e5484d;
 }
 .v-cmt-form {
+  margin-top: 10px;
+  padding: 8px 8px 8px 12px;
+  border-radius: 16px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  transition: border-color 0.15s;
+}
+.v-cmt-form:focus-within {
+  border-color: rgba(77, 141, 255, 0.6);
+}
+/* 署名：小头像 + 名字，看着是文字，点一下就能改 */
+.v-cmt-as {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  margin-bottom: 4px;
+  font-size: 12px;
+  color: var(--text-dim);
+  cursor: text;
+}
+.v-cmt-avatar {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #4d8dff, #8b5cf6);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+}
+.v-cmt-name {
+  flex: 0 1 auto;
+  min-width: 2em;
+  padding: 2px 0;
+  border: none;
+  border-bottom: 1px dashed transparent;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+  outline: none;
+}
+.v-cmt-name:focus {
+  border-bottom-color: var(--text-dim);
+}
+.v-cmt-pen {
+  flex: none;
+  opacity: 0.6;
+}
+.v-cmt-as:hover .v-cmt-pen {
+  opacity: 1;
+}
+.v-cmt-row {
   display: flex;
   align-items: flex-end;
   gap: 8px;
-  padding-top: 10px;
 }
-.v-cmt-form textarea {
+.v-cmt-row textarea {
   flex: 1;
   resize: none;
-  min-height: 36px;
+  min-height: 34px;
   max-height: 120px;
-  padding: 8px 10px;
-  border-radius: 10px;
-  border: 1px solid var(--border);
-  background: var(--bg);
+  padding: 7px 0;
+  border: none;
+  background: none;
   color: var(--text);
   font: inherit;
   line-height: 1.4;
+  outline: none;
 }
-.v-cmt-form .btn {
-  height: 36px;
+.v-cmt-send {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border: none;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  cursor: pointer;
+  transition: opacity 0.15s, transform 0.1s;
+}
+.v-cmt-send:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.v-cmt-send:active:not(:disabled) {
+  transform: scale(0.92);
 }
 
 /* 电脑：留言是右边一栏，照片让出位置 */
@@ -1867,9 +1921,11 @@ body.touch .badge {
     min-height: 0;
   }
   .v-cmt-list {
-    max-height: 38vh;
+    min-height: 26vh;
+    max-height: 42vh;
   }
-  .v-cmt-form textarea {
+  .v-cmt-row textarea,
+  .v-cmt-name {
     font-size: 16px; /* 小于 16px 时 iPhone 会自动放大整个页面 */
   }
   .v-bcmt {

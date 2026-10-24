@@ -275,7 +275,7 @@ export const EN: Record<string, string> = {
   "发送": "Send",
   "删除该相册": "Delete this album",
   "从相册里删除": "Delete from album",
-  "名字": "Name",
+  "点一下改名字": "Click to change your name",
   "有人留言": "New comment",
   "有 {n} 条新留言": "{n} new comments",
   "点一下从最早的一条开始看": "Tap to start from the earliest",
