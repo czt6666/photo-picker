@@ -25,6 +25,14 @@ export interface MenuItem {
   detail?: string;
   /** 分组标题行（不可点） */
   separator?: boolean;
+  /** 文字前面的图标（SVG） */
+  icon?: string;
+  /** 红字（删除之类） */
+  danger?: boolean;
+  /** 当前选中的那一项 */
+  current?: boolean;
+  /** 行尾的小按钮（比如垃圾桶） */
+  trail?: { icon: string; title: string; action: () => void };
 }
 
 let openMenu: HTMLElement | null = null;
@@ -47,7 +55,13 @@ export function contextMenu(x: number, y: number, items: MenuItem[]): void {
       continue;
     }
     const b = document.createElement('button');
-    b.textContent = it.label;
+    const label = document.createElement('span');
+    label.className = 'menu-label';
+    label.textContent = it.label;
+    if (it.icon) label.insertAdjacentHTML('afterbegin', it.icon);
+    b.appendChild(label);
+    if (it.danger) b.classList.add('danger');
+    if (it.current) b.classList.add('current');
     if (it.detail) {
       const d = document.createElement('span');
       d.className = 'menu-detail';
@@ -60,6 +74,20 @@ export function contextMenu(x: number, y: number, items: MenuItem[]): void {
       closeMenu();
       it.action();
     });
+    if (it.trail) {
+      const tr = it.trail;
+      const x = document.createElement('span');
+      x.className = 'menu-trail';
+      x.title = tr.title;
+      x.setAttribute('role', 'button');
+      x.innerHTML = tr.icon;
+      x.addEventListener('click', (e) => {
+        e.stopPropagation();
+        closeMenu();
+        tr.action();
+      });
+      b.appendChild(x);
+    }
     m.appendChild(b);
   }
   document.body.appendChild(m);

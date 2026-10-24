@@ -16,5 +16,7 @@ export const ICONS = {
   cloud: svg('<path d="M7 18h10.5a4 4 0 0 0 .6-7.95A6 6 0 0 0 6.3 9.1 4.5 4.5 0 0 0 7 18z"/>'),
   down: svg('<path d="m7 10 5 5 5-5"/>', ' style="width:14px;height:14px"'),
   bubble: svg('<path d="M20 12a8 8 0 0 1-11.6 7.1L4 20l1-4.2A8 8 0 1 1 20 12z"/>'),
+  trash: svg('<path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/>'),
+  check: svg('<path d="m5 12 5 5 9-10"/>'),
   back: svg('<path d="m15 5-7 7 7 7"/>', ' stroke-width="2.2"'),
 };

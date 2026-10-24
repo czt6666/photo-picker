@@ -17,7 +17,7 @@ import { closeMenu, contextMenu, esc, toast, type MenuItem } from './ui';
 import { formatBytes, Viewer } from './viewer';
 import { isBrowserShortcut, isMac, isTauri, isTouch, isWeb, mod as modKey, MOD_NAME, REVEAL_LABEL } from './platform';
 import { isRemotePath, parseRemotePath, parseShareInput, remote, SERVER, type RemoteAlbum, type RemoteEvent } from './remote';
-import { confirmBox, continueUpload, promptBox, showConnect, showCreate, showShare, stopUpload, uploadingCode } from './remoteUi';
+import { confirmBox, continueUpload, showConnect, showCreate, showShare, stopUpload, uploadingCode } from './remoteUi';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -490,7 +490,7 @@ async function showWorkdirMenu(x: number, y: number): Promise<void> {
     if (lib && !remote.active) setLibrary(lib);
   };
   const active = remote.active ? remote.get(remote.active) : undefined;
-  const remotes = remote.albums.filter((a) => a.code !== remote.active);
+  const remotes = remote.albums;
   const items: MenuItem[] = [];
   if (isTauri) items.push({ label: t('打开文件夹'), detail: modKey('O'), action: () => void chooseWorkdir() });
   if (active) items.push(...remoteItems(active));
@@ -504,7 +504,21 @@ async function showWorkdirMenu(x: number, y: number): Promise<void> {
     { separator: true, label: t('远程相册'), action: () => {} },
     { label: t('连接远程相册'), action: () => showConnect((a) => void openRemote(a.code)) },
     { label: t('创建远程相册'), action: () => void createRemote(null) },
-    ...remotes.map((a) => ({ label: `☁ ${a.name}`, detail: t('{n} 张', { n: a.count }), action: () => void openRemote(a.code) })),
+    ...remotes.map((a) => ({
+      label: a.name,
+      icon: ICONS.cloud,
+      detail: t('{n} 张', { n: a.count }),
+      current: a.code === remote.active,
+      action: () => void (a.code === remote.active ? undefined : openRemote(a.code)),
+      trail: {
+        icon: ICONS.trash,
+        title: t('从列表中移除'),
+        action: async () => {
+          const body = a.ownerToken ? t('只是不在这台设备上显示，线上相册还在') : t('只是不在这台设备上显示，以后打开链接还能再连上');
+          if (await confirmBox(t('从列表中移除「{name}」？', { name: a.name }), body, t('移除'))) void forgetRemote(a.code);
+        },
+      },
+    })),
   );
   if (others.length) {
     items.push(
@@ -874,7 +888,6 @@ function remoteItems(a: RemoteAlbum): MenuItem[] {
   const code = a.code;
   const owner = !!a.ownerToken;
   return [
-    { label: t('分享'), action: () => showShare(a) },
     { label: t('刷新'), action: () => void reloadRemote() },
     ...(owner
       ? [
@@ -882,28 +895,10 @@ function remoteItems(a: RemoteAlbum): MenuItem[] {
             ? { label: t('停止上传'), action: () => stopUpload() }
             : { label: t('继续上传'), detail: a.sourceDir ? baseName(a.sourceDir) : '', action: () => void continueUpload(a, progress) },
           {
-            label: t('改名'),
+            label: t('删除该相册'),
+            danger: true,
             action: async () => {
-              const name = await promptBox(t('相册名'), a.name);
-              if (!name) return;
-              try {
-                await remote.rename(code, name);
-                setLibrary(remote.libraryFromCache(code));
-                renderTitle();
-              } catch (e) {
-                toast(String(e), 'error');
-              }
-            },
-          },
-        ]
-      : []),
-    { label: t('从列表中移除'), action: () => void forgetRemote(code) },
-    ...(owner
-      ? [
-          {
-            label: t('删除远程相册'),
-            action: async () => {
-              if (!(await confirmBox(t('删除远程相册「{name}」？', { name: a.name }), t('线上图片和星标都会删掉，原图不受影响'), t('删除')))) return;
+              if (!(await confirmBox(t('删除远程相册「{name}」？', { name: a.name }), t('线上图片、星标和留言都会删掉，原图不受影响'), t('删除')))) return;
               try {
                 await remote.destroy(code);
                 await forgetRemote(code);

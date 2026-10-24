@@ -1124,11 +1124,6 @@ body.web #btn-rescan,
 body.web #btn-export {
   display: none;
 }
-body.web .tb-side {
-  width: auto;
-  border-right: none;
-  padding: 0;
-}
 
 /* 手机/平板：触屏没有悬停，星标按钮一直露出来，好点 */
 body.touch .badge {
@@ -1845,4 +1840,67 @@ body.touch .badge {
   .viewer.sheet-open.sheet-comments .v-bcmt {
     color: var(--accent);
   }
+}
+
+/* 工作目录按钮 + 分享按钮一起占满侧栏那么宽 */
+.toolbar .btn.workdir {
+  justify-content: flex-start;
+}
+.btn.workdir .label {
+  flex: 1;
+  text-align: left;
+}
+.tb-side .btn.share {
+  flex: none;
+  margin-left: 0;
+}
+
+/* 菜单：图标、当前项、红色的危险操作、行尾小按钮 */
+.menu-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.menu-label .ico {
+  width: 15px;
+  height: 15px;
+}
+.menu button.current {
+  background: rgba(77, 141, 255, 0.16);
+}
+.menu button.danger {
+  color: var(--danger);
+}
+.menu button.danger:hover:not(:disabled) {
+  background: var(--danger);
+  color: #fff;
+}
+.menu button {
+  align-items: center;
+}
+.menu-trail {
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 22px;
+  margin: -2px -4px -2px 0;
+  border-radius: 5px;
+  color: var(--text-dim);
+  opacity: 0.7;
+}
+.menu-trail .ico {
+  width: 14px;
+  height: 14px;
+}
+.menu button:hover .menu-trail {
+  color: rgba(255, 255, 255, 0.85);
+}
+.menu-trail:hover {
+  opacity: 1;
+  background: rgba(0, 0, 0, 0.25);
+  color: #fff !important;
 }
