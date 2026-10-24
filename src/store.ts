@@ -77,6 +77,11 @@ class Store {
     this.refilter();
   }
 
+  prependPhotos(photos: Photo[]): void {
+    this.all = photos.concat(this.all);
+    this.refilter();
+  }
+
   /** 重新计算可见列表。keepSelection=false 时清空选择。 */
   refilter(keepSelection = true): void {
     const q = this.query.trim().toLowerCase();

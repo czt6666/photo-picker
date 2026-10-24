@@ -105,6 +105,7 @@ pub fn app(cfg: Config) -> Result<Router, String> {
         .route_service("/r/{code}", index)
         .fallback_service(ServeDir::new(&cfg.web_dir))
         .layer(axum::middleware::map_response(utf8_charset))
+        .layer(axum::middleware::from_fn(web_cache))
         .with_state(state))
 }
 
@@ -118,6 +119,28 @@ async fn utf8_charset(mut res: Response) -> Response {
             res.headers_mut().insert(header::CONTENT_TYPE, v);
         }
     }
+    res
+}
+
+/// 网页的缓存规矩（微信内置浏览器尤其爱缓存）：
+/// - `assets/` 下的脚本、样式文件名里带内容哈希，内容变了名字就变，可以缓存一年；
+/// - 网页本身（index.html）每次都要回服务器问一声有没有新版（no-cache 不是“不缓存”，是“用之前先确认”），
+///   这样一发新版，网页里引用的就是新文件名，旧缓存自然用不上。
+async fn web_cache(req: axum::extract::Request, next: axum::middleware::Next) -> Response {
+    let path = req.uri().path().to_string();
+    let mut res = next.run(req).await;
+    if res.headers().contains_key(header::CACHE_CONTROL) {
+        return res;
+    }
+    let html = res.headers().get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).is_some_and(|ct| ct.starts_with("text/html"));
+    let value = if path.contains("/assets/") {
+        "public, max-age=31536000, immutable"
+    } else if html {
+        "no-cache"
+    } else {
+        return res;
+    };
+    res.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static(value));
     res
 }
 

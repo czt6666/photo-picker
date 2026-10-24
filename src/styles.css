@@ -1128,7 +1128,8 @@ body.drop-target .content::after {
 }
 
 /* 网页版：没有本地图库，藏掉本地才有的按钮（刷新留着，远程相册用它拉最新） */
-body.web #btn-export {
+body.web #btn-export,
+body.web .v-full {
   display: none;
 }
 /* 手机顶栏地方小，星标本来就实时同步，刷新就不放了 */
@@ -1479,7 +1480,7 @@ body.touch .badge {
   .v-bstar.on svg {
     animation: pop 0.35s ease-out;
   }
-  .viewer.sheet-open .v-binfo {
+  .viewer.sheet-open:not(.sheet-comments) .v-binfo {
     color: var(--accent);
   }
   .viewer.bare .v-bar {

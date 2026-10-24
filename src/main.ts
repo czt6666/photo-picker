@@ -25,6 +25,34 @@ translateDom(document);
 document.body.classList.toggle('web', isWeb);
 document.body.classList.toggle('touch', isTouch);
 
+/**
+ * 网页版兜底：有的内置浏览器（微信）不守缓存规矩，还拿着旧网页。
+ * 打开时、切回来时去服务器拿一眼最新的网页，看它引用的脚本文件名（带内容哈希）和自己的一样不一样，
+ * 不一样就说明发了新版，刷新一次。同一个新版本只刷一次，免得万一刷完还是旧的就一直刷。
+ */
+function checkForNewVersion(): void {
+  const mine = document.querySelector<HTMLScriptElement>('script[type="module"][src*="/assets/"]')?.getAttribute('src');
+  if (!mine) return; // 开发模式
+  void fetch(import.meta.env.BASE_URL, { cache: 'no-cache' })
+    .then((r) => (r.ok ? r.text() : ''))
+    .then((html) => {
+      const latest = /<script[^>]+type="module"[^>]+src="([^"]+)"/.exec(html)?.[1];
+      if (!latest || latest === mine) return;
+      try {
+        if (sessionStorage.getItem('pp.reloadedFor') === latest) return;
+        sessionStorage.setItem('pp.reloadedFor', latest);
+      } catch {
+        return;
+      }
+      location.reload();
+    })
+    .catch(() => {});
+}
+if (isWeb) {
+  checkForNewVersion();
+  document.addEventListener('visibilitychange', () => document.visibilityState === 'visible' && checkForNewVersion());
+}
+
 const gridEl = $('grid');
 const emptyEl = $('empty');
 const titleEl = $('view-title');
@@ -41,6 +69,7 @@ const grid = new Grid(gridEl, $('grid-inner'), {
   sectionName: (dir) => store.folder(dir)?.name ?? baseName(dir),
   sectionChanged: (dir) => onSectionAtTop(dir),
   nearEnd: () => void loadNextAlbum(),
+  nearStart: () => void loadPrevAlbum(),
 });
 
 const viewer = new Viewer($('viewer'), {
@@ -127,7 +156,7 @@ async function showView(view: View, load: () => Promise<Photo[]>): Promise<boole
   }
   if (seq !== viewSeq) return true; // 用户已经点了别的文件夹
   chain = view.kind === 'folder' ? [view.path] : [];
-  chainEnded = false;
+  chainEnded = chainStartEnded = false;
   lastChunk = photos;
   store.setPhotos(view, photos);
   if (view.kind === 'folder') lastFolder = view.path;
@@ -163,17 +192,46 @@ let chain: string[] = [];
 let chainBusy = false;
 /** 接下一个相册失败了：这个视图里不再重试，免得一直转 */
 let chainEnded = false;
+/** 往上接（上一个相册）也一样，单独记 */
+let chainStartBusy = false;
+let chainStartEnded = false;
 /** 最近接上来的那批照片：预生成缩略图时连它一起发（后端每次调用会替换掉上一批排队） */
 let lastChunk: Photo[] = [];
 
-function nextAlbumPath(): string | null {
+/** 已显示的相册前一个（step=-1）/ 后一个（step=1）是谁 */
+function neighborAlbumPath(step: 1 | -1): string | null {
   const v = store.view;
   // 搜索时只在已经显示的相册里找，不往后接（否则没有结果时会把整个工作目录读一遍）
   if (v.kind !== 'folder' || store.query.trim() || !chain.length) return null;
   const all = store.library.folders;
   const list = v.starredOnly ? all.filter((f) => f.starred > 0 || chain.includes(f.path)) : all;
-  const i = list.findIndex((f) => f.path === chain[chain.length - 1]);
-  return i >= 0 ? (list[i + 1]?.path ?? null) : null;
+  const i = list.findIndex((f) => f.path === (step > 0 ? chain[chain.length - 1] : chain[0]));
+  return i >= 0 ? (list[i + step]?.path ?? null) : null;
+}
+const nextAlbumPath = () => neighborAlbumPath(1);
+
+/** 往上滚到当前相册的开头：把侧栏里排在它前面的相册接到前面（从下面的相册点进来，也能一路滑回上面） */
+async function loadPrevAlbum(): Promise<void> {
+  if (chainStartBusy || chainStartEnded) return;
+  const path = neighborAlbumPath(-1);
+  if (!path) return;
+  const seq = viewSeq;
+  chainStartBusy = true;
+  try {
+    await store.starsSettled();
+    const photos = await api.listFolder(path);
+    if (seq !== viewSeq) return;
+    chain.unshift(path);
+    store.prependPhotos(photos);
+    grid.prepend();
+    updateStatus();
+    void api.prefetchThumbs(photos.map((p) => p.path)).catch(() => {});
+  } catch {
+    if (seq === viewSeq) chainStartEnded = true;
+  } finally {
+    chainStartBusy = false;
+    grid.poke();
+  }
 }
 
 async function loadNextAlbum(): Promise<void> {
@@ -1017,7 +1075,7 @@ async function reloadRemoteView(): Promise<void> {
     if (seq !== viewSeq || viewer.opened) return;
     store.all = photos;
     chain = v.kind === 'folder' ? [v.path] : [];
-    chainEnded = false;
+    chainEnded = chainStartEnded = false;
     store.refilter();
     grid.reset(true);
     renderChrome();

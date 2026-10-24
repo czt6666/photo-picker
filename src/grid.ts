@@ -38,6 +38,8 @@ export interface GridCallbacks {
   sectionChanged(dir: string): void;
   /** 快滚到底了：可以把下一个相册接上来 */
   nearEnd(): void;
+  /** 快滚到顶了：可以把上一个相册接到前面 */
+  nearStart(): void;
 }
 
 export class Grid {
@@ -165,6 +167,11 @@ export class Grid {
     this.relayout(undefined, true);
   }
 
+  /** 列表前面接上了上一个相册：重新排版，并把滚动位置往下挪新增的高度，眼前的照片不跳 */
+  prepend(): void {
+    this.relayout(undefined, true, true);
+  }
+
   /** 重新检查一遍（比如“下一个相册”加载完了，看看还要不要接着接） */
   poke(): void {
     this.schedule();
@@ -286,7 +293,7 @@ export class Grid {
     return this.layout.firstIndexAt(this.el.scrollTop);
   }
 
-  private relayout(anchorIndex?: number, keepScroll = false): void {
+  private relayout(anchorIndex?: number, keepScroll = false, prepended = false): void {
     const width = this.el.clientWidth - this.pad * 2;
     if (width <= 0) return;
     const anchor = anchorIndex ?? this.firstVisibleIndex();
@@ -299,6 +306,7 @@ export class Grid {
       this.colW = width / this.cols;
     }
     this.rowH = this.cellH + this.gap;
+    const oldH = this.layout.height;
     this.layout = new GridLayout(store.sections, {
       cols: this.cols,
       rowH: this.rowH,
@@ -315,6 +323,10 @@ export class Grid {
     for (const h of this.heads.values()) h.remove();
     this.heads.clear();
     if (!keepScroll && anchor > 0) this.el.scrollTop = this.layout.pos(anchor)?.y ?? 0;
+    if (prepended) {
+      this.el.scrollTop += this.layout.height - oldH;
+      this.lastTop = this.el.scrollTop; // 不算“高速滚动”
+    }
     this.update();
   }
 
@@ -379,6 +391,7 @@ export class Grid {
       this.cb.sectionChanged(cur.dir);
     }
     if (top + viewH > L.height - viewH * 1.5) this.cb.nearEnd();
+    if (top < viewH * 1.5) this.cb.nearStart();
   }
 
   private createCell(): HTMLElement {
