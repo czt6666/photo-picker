@@ -14,6 +14,8 @@ export interface Photo {
   companions: string[];
   /** 远程相册里的照片：最后是谁加的星（大家共用一份星标） */
   starredBy?: string | null;
+  /** 远程相册里的照片：有几条留言 */
+  comments?: number;
   /** 远程相册里的照片才有 */
   remote?: RemoteRef;
 }

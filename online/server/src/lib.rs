@@ -1,9 +1,9 @@
 //! PhotoPicker 远程相册服务。
 //!
-//! 一个远程相册 = 一份压缩预览 + 一份大家共用的星标。链接是 `/r/<相册码>`，拿到链接的人都能进来挑。
+//! 一个远程相册 = 一份压缩预览 + 一份大家共用的星标 + 每张照片下的留言。链接是 `/r/<相册码>`，拿到链接的人都能进来挑。
 //! - 网页版 PhotoPicker（就是桌面版同一套前端）也由这里提供：`/`、`/r/<code>` 都返回它的 index.html；
 //! - 桌面版通过同样的接口访问（允许跨域）；
-//! - 谁加星/取消、新传了照片，都通过 WebSocket 实时推给正在看这个相册的所有人。
+//! - 谁加星/取消、留言、新传了照片，都通过 WebSocket 实时推给正在看这个相册的所有人。
 //!
 //! 服务器上**只有压缩后的预览**，没有原图：摄影师那边上传前就压好了（桌面版用自带的解码器，网页版在浏览器里压），
 //! 原图一直留在摄影师电脑上，导出时按文件名对回去。
@@ -84,6 +84,8 @@ pub fn app(cfg: Config) -> Result<Router, String> {
         )
         .route("/albums/{code}/photos/delete", post(delete_photos))
         .route("/albums/{code}/stars", put(set_stars))
+        .route("/albums/{code}/photos/{id}/comments", post(add_comment))
+        .route("/albums/{code}/comments/{id}", axum::routing::delete(delete_comment))
         .route("/albums/{code}/ws", get(ws))
         .fallback(|| async { ApiError::new(StatusCode::NOT_FOUND, "没有这个接口") });
 
@@ -355,7 +357,7 @@ async fn create_album(State(st): S, Json(req): Json<CreateAlbum>) -> ApiResult {
 
 async fn get_album(State(st): S, ClientIp(ip): ClientIp, UrlPath(code): UrlPath<String>) -> ApiResult {
     let a = album(&st, ip, &code)?;
-    Ok(Json(json!({ "album": a, "photos": st.db.photos(&a.id)? })))
+    Ok(Json(json!({ "album": a, "photos": st.db.photos(&a.id)?, "comments": st.db.comments(&a.id)? })))
 }
 
 #[derive(Deserialize)]
@@ -504,4 +506,53 @@ async fn set_stars(State(st): S, ClientIp(ip): ClientIp, UrlPath(code): UrlPath<
         st.hub.send(&a.id, json!({ "type": "stars", "ids": changed, "starred": req.starred, "by": by }));
     }
     Ok(Json(json!({ "changed": changed })))
+}
+
+// ---------- 留言 ----------
+
+const COMMENT_MAX: usize = 500;
+
+#[derive(Deserialize)]
+struct NewComment {
+    text: String,
+}
+
+async fn add_comment(
+    State(st): S,
+    ClientIp(ip): ClientIp,
+    UrlPath((code, photo_id)): UrlPath<(String, i64)>,
+    Json(req): Json<NewComment>,
+) -> ApiResult {
+    let a = album(&st, ip, &code)?;
+    // 换行保留，其它控制字符去掉
+    let text: String = req.text.trim().chars().filter(|c| *c == '\n' || !c.is_control()).collect();
+    if text.is_empty() {
+        return Err(ApiError::bad("写点什么再发"));
+    }
+    if text.chars().count() > COMMENT_MAX {
+        return Err(ApiError::bad(format!("留言太长了（最多 {COMMENT_MAX} 字）")));
+    }
+    let Some((comment, token)) = st.db.add_comment(&a.id, photo_id, &text)? else {
+        return Err(ApiError::new(StatusCode::NOT_FOUND, "这张照片不在相册里"));
+    };
+    st.hub.send(&a.id, json!({ "type": "comment", "comment": comment }));
+    Ok(Json(json!({ "comment": comment, "token": token })))
+}
+
+/// 删留言：`x-comment-token`（留言时拿到的）或 `x-owner-token`（相册创建者）
+async fn delete_comment(
+    State(st): S,
+    ClientIp(ip): ClientIp,
+    UrlPath((code, id)): UrlPath<(String, i64)>,
+    headers: HeaderMap,
+) -> ApiResult {
+    let a = album(&st, ip, &code)?;
+    let header = |k: &str| headers.get(k).and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
+    let owner = header("x-owner-token");
+    let as_owner = !owner.is_empty() && owner == a.owner_token;
+    if !st.db.delete_comment(&a.id, id, &header("x-comment-token"), as_owner)? {
+        return Err(ApiError::new(StatusCode::FORBIDDEN, "只能删自己的留言"));
+    }
+    st.hub.send(&a.id, json!({ "type": "comment_deleted", "id": id }));
+    Ok(Json(json!({ "deleted": id })))
 }

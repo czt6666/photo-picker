@@ -1,4 +1,4 @@
-//! 远程相册的数据都在一个 SQLite 文件里：相册、照片、星标。
+//! 远程相册的数据都在一个 SQLite 文件里：相册、照片、星标、留言。
 //!
 //! 照片本身（缩略图、预览图）是磁盘上的 JPEG 文件，这里只存它们的“户口”。
 //! 量级很小（一个相册几千行），一把锁串行访问就够快：单条查询是微秒级的。
@@ -40,6 +40,14 @@ CREATE TABLE IF NOT EXISTS stars (
   by       TEXT NOT NULL,
   at       INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS comments (
+  id       INTEGER PRIMARY KEY AUTOINCREMENT,
+  photo_id INTEGER NOT NULL REFERENCES photos(id) ON DELETE CASCADE,
+  text     TEXT NOT NULL,
+  token    TEXT NOT NULL,
+  at       INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS comments_photo ON comments(photo_id);
 "#;
 
 /// 相册码字母表：去掉了容易看错的 0/O、1/I。16 位 = 80 比特，靠复制链接、不靠记，猜是猜不到的。
@@ -86,6 +94,15 @@ pub struct Photo {
     pub starred: bool,
     /// 最后是谁加的星
     pub starred_by: Option<String>,
+}
+
+/// 一条留言：挂在某张照片下面，不记名字（和星标一样，拿到链接的人都能留）
+#[derive(Debug, Clone, Serialize)]
+pub struct Comment {
+    pub id: i64,
+    pub photo_id: i64,
+    pub text: String,
+    pub at: i64,
 }
 
 pub struct NewPhoto {
@@ -257,5 +274,53 @@ impl Db {
         }
         tx.commit().map_err(e)?;
         Ok(changed)
+    }
+
+    /// 相册里所有留言，按时间先后
+    pub fn comments(&self, album_id: &str) -> R<Vec<Comment>> {
+        let c = self.conn.lock();
+        let mut st = c
+            .prepare(
+                "SELECT c.id, c.photo_id, c.text, c.at FROM comments c JOIN photos p ON p.id = c.photo_id
+                 WHERE p.album_id = ?1 ORDER BY c.id",
+            )
+            .map_err(e)?;
+        let rows = st
+            .query_map([album_id], |r| Ok(Comment { id: r.get(0)?, photo_id: r.get(1)?, text: r.get(2)?, at: r.get(3)? }))
+            .map_err(e)?;
+        rows.collect::<Result<_, _>>().map_err(e)
+    }
+
+    /// 留言。返回这条留言和它的删除口令（只有留言的那台设备拿得到，用来删自己的留言）。
+    /// 照片不属于这个相册就返回 None。
+    pub fn add_comment(&self, album_id: &str, photo_id: i64, text: &str) -> R<Option<(Comment, String)>> {
+        let c = self.conn.lock();
+        let belongs = c
+            .query_row("SELECT 1 FROM photos WHERE album_id = ?1 AND id = ?2", params![album_id, photo_id], |_| Ok(()))
+            .optional()
+            .map_err(e)?
+            .is_some();
+        if !belongs {
+            return Ok(None);
+        }
+        let token = random_string(ID_ALPHABET, 20);
+        let at = now();
+        c.execute("INSERT INTO comments (photo_id, text, token, at) VALUES (?1, ?2, ?3, ?4)", params![photo_id, text, token, at])
+            .map_err(e)?;
+        Ok(Some((Comment { id: c.last_insert_rowid(), photo_id, text: text.to_string(), at }, token)))
+    }
+
+    /// 删留言：留言的人（拿删除口令）或相册创建者（as_owner）可以删。返回是否删到了
+    pub fn delete_comment(&self, album_id: &str, id: i64, token: &str, as_owner: bool) -> R<bool> {
+        let c = self.conn.lock();
+        let n = c
+            .execute(
+                "DELETE FROM comments WHERE id = ?1
+                   AND photo_id IN (SELECT id FROM photos WHERE album_id = ?2)
+                   AND (?3 OR (token = ?4 AND ?4 != ''))",
+                params![id, album_id, as_owner, token],
+            )
+            .map_err(e)?;
+        Ok(n > 0)
     }
 }

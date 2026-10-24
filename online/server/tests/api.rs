@@ -209,3 +209,51 @@ async fn pages_declare_utf8() {
     let (_, _, head) = http(&srv, "GET", "/api/albums/ABCDEFGHJKLMNPQR", &[], vec![], "").await;
     assert!(head.to_ascii_lowercase().contains("content-type: application/json"), "{head}");
 }
+
+#[tokio::test]
+async fn anyone_with_link_can_comment() {
+    let srv = start(None).await;
+    let (_, v) = call(&srv, "POST", "/api/albums", &[], Some(json!({ "name": "留言" }))).await;
+    let code = v["album"]["code"].as_str().unwrap().to_string();
+    let owner = v["owner_token"].as_str().unwrap().to_string();
+    let (_, v) = upload(&srv, &code, &owner, "外景/dsc_0001", "DSC_0001.JPG").await;
+    let p1 = v["photo"]["id"].as_i64().unwrap();
+    let (mut ws, _) = tokio_tungstenite::connect_async(format!("{}/api/albums/{code}/ws", srv.ws)).await.unwrap();
+
+    // 不用名字、不用口令就能留言；空的、太长的不行；别的相册的照片不行
+    let url = format!("/api/albums/{code}/photos/{p1}/comments");
+    let (s, _) = call(&srv, "POST", &url, &[], Some(json!({ "text": "   " }))).await;
+    assert_eq!(s, 400);
+    let (s, _) = call(&srv, "POST", &url, &[], Some(json!({ "text": "长".repeat(501) }))).await;
+    assert_eq!(s, 400);
+    let (s, _) = call(&srv, "POST", &format!("/api/albums/{code}/photos/99999/comments"), &[], Some(json!({ "text": "x" }))).await;
+    assert_eq!(s, 404);
+    let (s, v) = call(&srv, "POST", &url, &[], Some(json!({ "text": " 这张脸修瘦一点\n背景去掉路人 " }))).await;
+    assert_eq!(s, 200, "{v}");
+    let c1 = v["comment"]["id"].as_i64().unwrap();
+    let mine = v["token"].as_str().unwrap().to_string();
+    assert_eq!(v["comment"]["text"], "这张脸修瘦一点\n背景去掉路人");
+    let ev = next_json(&mut ws, "comment").await;
+    assert_eq!(ev["comment"]["photo_id"], p1);
+    let (_, v) = call(&srv, "POST", &url, &[], Some(json!({ "text": "第二条" }))).await;
+    let c2 = v["comment"]["id"].as_i64().unwrap();
+
+    // 打开相册时一起拿到留言
+    let (_, v) = call(&srv, "GET", &format!("/api/albums/{code}"), &[], None).await;
+    assert_eq!(v["comments"].as_array().unwrap().len(), 2);
+    assert!(v["comments"][0].get("token").is_none(), "删除口令不外传");
+
+    // 别人删不了；自己能删；创建者能删任何一条
+    let del = |id: i64| format!("/api/albums/{code}/comments/{id}");
+    let (s, _) = call(&srv, "DELETE", &del(c1), &[], None).await;
+    assert_eq!(s, 403);
+    let (s, _) = call(&srv, "DELETE", &del(c1), &[("x-comment-token", "wrong")], None).await;
+    assert_eq!(s, 403);
+    let (s, _) = call(&srv, "DELETE", &del(c1), &[("x-comment-token", &mine)], None).await;
+    assert_eq!(s, 200);
+    assert_eq!(next_json(&mut ws, "comment_deleted").await["id"], c1);
+    let (s, _) = call(&srv, "DELETE", &del(c2), &[("x-owner-token", &owner)], None).await;
+    assert_eq!(s, 200);
+    let (_, v) = call(&srv, "GET", &format!("/api/albums/{code}"), &[], None).await;
+    assert_eq!(v["comments"], json!([]));
+}

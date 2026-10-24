@@ -1658,3 +1658,191 @@ body.touch .badge {
     display: none;
   }
 }
+
+/* ---------- 留言 ---------- */
+
+/* 格子右下角：有几条留言 */
+.cmt {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 6px 1px 4px;
+  border-radius: 9px;
+  font-size: 11px;
+  line-height: 16px;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.6);
+  pointer-events: none;
+}
+.cmt[hidden] {
+  display: none;
+}
+.cmt .ico {
+  width: 12px;
+  height: 12px;
+}
+.grid.compact .cmt {
+  right: 4px;
+  bottom: 4px;
+}
+
+.v-cmtbtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.v-cmtbtn[hidden],
+.v-bcmt[hidden] {
+  display: none !important;
+}
+.viewer.sheet-open.sheet-comments .v-cmtbtn {
+  color: var(--accent);
+}
+.v-comments {
+  display: none;
+  flex-direction: column;
+  min-height: 0;
+}
+.viewer.sheet-comments .v-comments {
+  display: flex;
+}
+.viewer.sheet-comments .v-sheet-body {
+  display: none;
+}
+.v-cmt-head {
+  font-size: 15px;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+.v-cmt-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.v-cmt-item {
+  padding: 8px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+}
+.v-cmt-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.5;
+}
+.v-cmt-meta {
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.v-cmt-del {
+  margin-left: 10px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--text-dim);
+  font: inherit;
+  cursor: pointer;
+}
+.v-cmt-del:hover {
+  color: var(--danger);
+}
+.v-cmt-empty {
+  padding: 14px 0;
+}
+.v-cmt-form {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding-top: 10px;
+}
+.v-cmt-form textarea {
+  flex: 1;
+  resize: none;
+  min-height: 36px;
+  max-height: 120px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  line-height: 1.4;
+}
+.v-cmt-form .btn {
+  height: 36px;
+}
+
+/* 电脑：留言是右边一栏，照片让出位置 */
+@media (min-width: 761px) {
+  .v-sheet {
+    display: flex;
+    flex-direction: column;
+    position: absolute;
+    top: 46px;
+    right: 0;
+    bottom: 0;
+    z-index: 4;
+    width: 320px;
+    padding: 12px 16px 14px;
+    background: var(--panel);
+    border-left: 1px solid var(--border);
+    box-shadow: -8px 0 30px rgba(0, 0, 0, 0.35);
+    transform: translateX(100%);
+    visibility: hidden;
+    transition: transform 0.25s cubic-bezier(0.2, 0.9, 0.25, 1), visibility 0.25s;
+  }
+  .viewer.sheet-open .v-sheet {
+    transform: none;
+    visibility: visible;
+  }
+  .viewer.sheet-open .v-stage {
+    margin-right: 320px;
+  }
+  .v-grip,
+  .v-sheet-body {
+    display: none;
+  }
+  .v-comments {
+    flex: 1;
+  }
+}
+
+/* 手机：留言在底部面板里，列表限高可滚动 */
+@media (max-width: 760px) {
+  .viewer.sheet-comments .v-sheet {
+    display: flex;
+    flex-direction: column;
+    max-height: 70%;
+  }
+  .v-comments {
+    flex: 1;
+    min-height: 0;
+  }
+  .v-cmt-list {
+    max-height: 38vh;
+  }
+  .v-cmt-form textarea {
+    font-size: 16px; /* 小于 16px 时 iPhone 会自动放大整个页面 */
+  }
+  .v-bcmt {
+    position: relative;
+  }
+  .v-bcmt .n {
+    position: absolute;
+    top: 2px;
+    right: 12px;
+    min-width: 16px;
+    padding: 0 4px;
+    border-radius: 8px;
+    font-size: 10px;
+    line-height: 16px;
+    color: #fff;
+    background: var(--accent);
+  }
+  .viewer.sheet-open.sheet-comments .v-bcmt {
+    color: var(--accent);
+  }
+}

@@ -15,5 +15,6 @@ export const ICONS = {
   folder: svg('<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>'),
   cloud: svg('<path d="M7 18h10.5a4 4 0 0 0 .6-7.95A6 6 0 0 0 6.3 9.1 4.5 4.5 0 0 0 7 18z"/>'),
   down: svg('<path d="m7 10 5 5 5-5"/>', ' style="width:14px;height:14px"'),
+  bubble: svg('<path d="M20 12a8 8 0 0 1-11.6 7.1L4 20l1-4.2A8 8 0 1 1 20 12z"/>'),
   back: svg('<path d="m15 5-7 7 7 7"/>', ' stroke-width="2.2"'),
 };

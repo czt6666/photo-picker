@@ -15,6 +15,7 @@ import { GridLayout } from './gridLayout';
 import { ratingStars } from './rating';
 import { store } from './store';
 import { t } from './i18n';
+import { ICONS } from './icons';
 import { esc } from './ui';
 import type { Photo } from './types';
 
@@ -384,7 +385,7 @@ export class Grid {
     const c = document.createElement('div');
     c.className = 'cell';
     c.innerHTML =
-      `<span class="frame"><img class="thumb" decoding="async" draggable="false" alt=""><button class="badge" tabindex="-1" title="${t('星标（空格）')}">★</button><span class="raw-tag"></span><span class="rate" hidden></span></span>`;
+      `<span class="frame"><img class="thumb" decoding="async" draggable="false" alt=""><button class="badge" tabindex="-1" title="${t('星标（空格）')}">★</button><span class="raw-tag"></span><span class="rate" hidden></span><span class="cmt" hidden></span></span>`;
     const img = c.querySelector('img')!;
     img.addEventListener('load', () => c.classList.add('loaded'));
     img.addEventListener('error', () => {
@@ -441,6 +442,11 @@ export class Grid {
     const rate = c.querySelector<HTMLElement>('.rate')!;
     if (rate.textContent !== stars) rate.textContent = stars;
     rate.hidden = !stars;
+    // 远程相册：有留言的显示条数
+    const cmt = c.querySelector<HTMLElement>('.cmt')!;
+    const n = p.comments ? String(p.comments) : '';
+    if (cmt.textContent !== n) cmt.innerHTML = n ? `${ICONS.bubble}${n}` : '';
+    cmt.hidden = !n;
   }
 
   private recycle(c: HTMLElement): void {

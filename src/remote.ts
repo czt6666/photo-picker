@@ -64,6 +64,15 @@ export interface ServerPhoto {
   starred_by: string | null;
 }
 
+/** 照片下的一条留言（不记名字） */
+export interface ServerComment {
+  id: number;
+  photo_id: number;
+  text: string;
+  /** 秒 */
+  at: number;
+}
+
 interface ServerAlbum {
   id: string;
   code: string;
@@ -76,6 +85,8 @@ export type RemoteEvent =
   | { type: 'deleted'; ids: number[] }
   | { type: 'presence'; names: string[] }
   | { type: 'album'; name: string }
+  | { type: 'comment'; comment: ServerComment }
+  | { type: 'comment_deleted'; id: number }
   | { type: 'gone' }
   /** 断线重连后、或者服务器说我们落后太多：整个相册重新拉过 */
   | { type: 'reload' };
@@ -113,6 +124,10 @@ class Remote {
   private ids = new Map<string, string>();
   /** 最近一次拉到的照片：给“已加星标”汇总、计数用 */
   private cache = new Map<string, ServerPhoto[]>();
+  /** 每个相册的留言 */
+  private comments = new Map<string, ServerComment[]>();
+  /** 自己留言时拿到的删除口令：`相册码:留言id` → 口令（只有这台设备能删自己的留言） */
+  private commentTokens = prefs.get<Record<string, string>>('remote.commentTokens', {});
   /** 谁正在看 */
   presence = new Map<string, string[]>();
   private sockets = new Map<string, WebSocket>();
@@ -178,8 +193,15 @@ class Remote {
     prefs.set('remote.albums', this.albums);
   }
 
-  private async call<T>(a: { server: string }, method: string, path: string, body?: unknown, owner?: RemoteAlbum): Promise<T> {
-    const headers: Record<string, string> = {};
+  private async call<T>(
+    a: { server: string },
+    method: string,
+    path: string,
+    body?: unknown,
+    owner?: RemoteAlbum,
+    extra: Record<string, string> = {},
+  ): Promise<T> {
+    const headers: Record<string, string> = { ...extra };
     if (body !== undefined && !(body instanceof FormData)) headers['content-type'] = 'application/json';
     if (owner?.ownerToken) headers['x-owner-token'] = owner.ownerToken;
     let res: Response;
@@ -203,9 +225,10 @@ class Remote {
   async fetch(code: string): Promise<ServerPhoto[]> {
     const a = this.get(code);
     if (!a) throw new RemoteError(t('没有连接这个远程相册'), 404);
-    const r = await this.call<{ album: ServerAlbum; photos: ServerPhoto[] }>(a, 'GET', `/albums/${code}`);
+    const r = await this.call<{ album: ServerAlbum; photos: ServerPhoto[]; comments?: ServerComment[] }>(a, 'GET', `/albums/${code}`);
     this.ids.set(code, r.album.id);
     this.cache.set(code, r.photos);
+    this.comments.set(code, r.comments ?? []);
     a.name = r.album.name;
     this.recount(code);
     return r.photos;
@@ -239,6 +262,7 @@ class Remote {
       rating: 0,
       companions: p.companions,
       starredBy: p.starred_by,
+      comments: this.commentCount(code, p.id),
       remote: {
         code,
         id: p.id,
@@ -371,6 +395,58 @@ class Remote {
     this.recount(code);
   }
 
+  // ---------- 留言 ----------
+
+  /** 某张照片下的留言，按时间先后 */
+  commentsOf(path: string): ServerComment[] {
+    const { code, id } = parseRemotePath(path);
+    return (this.comments.get(code) ?? []).filter((c) => c.photo_id === id);
+  }
+
+  commentCount(code: string, photoId: number): number {
+    let n = 0;
+    for (const c of this.comments.get(code) ?? []) if (c.photo_id === photoId) n++;
+    return n;
+  }
+
+  async addComment(path: string, text: string): Promise<ServerComment> {
+    const { code, id } = parseRemotePath(path);
+    const a = this.get(code);
+    if (!a || id === null) throw new RemoteError(t('没有连接这个远程相册'), 404);
+    const r = await this.call<{ comment: ServerComment; token: string }>(a, 'POST', `/albums/${code}/photos/${id}/comments`, { text });
+    this.commentTokens[`${code}:${r.comment.id}`] = r.token;
+    prefs.set('remote.commentTokens', this.commentTokens);
+    this.applyComment(code, r.comment);
+    return r.comment;
+  }
+
+  /** 自己留的，或者自己是相册创建者，才能删 */
+  canDelete(code: string, commentId: number): boolean {
+    return !!this.get(code)?.ownerToken || !!this.commentTokens[`${code}:${commentId}`];
+  }
+
+  async deleteComment(code: string, commentId: number): Promise<void> {
+    const a = this.get(code);
+    if (!a) return;
+    const key = `${code}:${commentId}`;
+    const headers: Record<string, string> = {};
+    if (this.commentTokens[key]) headers['x-comment-token'] = this.commentTokens[key];
+    await this.call(a, 'DELETE', `/albums/${code}/comments/${commentId}`, undefined, a, headers);
+    delete this.commentTokens[key];
+    prefs.set('remote.commentTokens', this.commentTokens);
+    this.dropComment(code, commentId);
+  }
+
+  private applyComment(code: string, c: ServerComment): void {
+    const list = this.comments.get(code) ?? [];
+    if (!list.some((x) => x.id === c.id)) list.push(c);
+    this.comments.set(code, list);
+  }
+
+  private dropComment(code: string, id: number): void {
+    this.comments.set(code, (this.comments.get(code) ?? []).filter((c) => c.id !== id));
+  }
+
   /** 导出时把远程照片对回原图要用的信息 */
   photoInfo(path: string): ServerPhoto | undefined {
     const { code, id } = parseRemotePath(path);
@@ -417,7 +493,9 @@ class Remote {
         const gone = new Set(ev.ids);
         this.cache.set(code, (this.cache.get(code) ?? []).filter((p) => !gone.has(p.id)));
         this.recount(code);
-      } else if (ev.type === 'presence') this.presence.set(code, ev.names);
+      } else if (ev.type === 'comment') this.applyComment(code, ev.comment);
+      else if (ev.type === 'comment_deleted') this.dropComment(code, ev.id);
+      else if (ev.type === 'presence') this.presence.set(code, ev.names);
       else if (ev.type === 'album') {
         a.name = ev.name;
         this.save();

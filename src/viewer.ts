@@ -19,6 +19,9 @@ import { ImageLoader } from './loader';
 import type { Photo, PhotoInfo } from './types';
 import { WheelStepper } from './wheel';
 import { isTauri } from './platform';
+import { remote } from './remote';
+import { ICONS } from './icons';
+import { esc, toast } from './ui';
 
 const BUCKETS = [1024, 1600, 2048, 2560, 3200, 4096, 5120, 6144];
 const RAPID_MS = 160;
@@ -97,6 +100,10 @@ export class Viewer {
   /** 手机底栏（学 iPhone 的“照片”）：星标 + 信息 */
   private barStar: HTMLButtonElement;
   private sheetBody: HTMLElement;
+  /** 留言：看大图顶栏的按钮（电脑）、底栏的按钮（手机）、面板 */
+  private cmtBtn: HTMLButtonElement;
+  private barCmt: HTMLButtonElement;
+  private cmtEl: HTMLElement;
   /** 左右滑时露出来的前一张 / 后一张 */
   private peek: HTMLImageElement[];
   /** 顶栏的五颗星：显示 / 点击设置星级 */
@@ -122,8 +129,13 @@ export class Viewer {
     this.barStar.addEventListener('click', () => void this.toggleStar());
     const info = $<HTMLButtonElement>('.v-binfo');
     info.innerHTML = ICON_INFO;
-    info.addEventListener('click', () => this.toggleSheet());
+    info.addEventListener('click', () => this.toggleSheet(undefined, 'info'));
     this.sheetBody = $('.v-sheet-body');
+    this.cmtBtn = $<HTMLButtonElement>('.v-cmtbtn');
+    this.barCmt = $<HTMLButtonElement>('.v-bcmt');
+    this.cmtEl = $('.v-comments');
+    for (const b of [this.cmtBtn, this.barCmt]) b.addEventListener('click', () => this.toggleSheet(undefined, 'comments'));
+    this.buildCommentForm();
     $('.v-sheet').addEventListener('click', (e) => (e.target as HTMLElement).closest('.v-grip') && this.toggleSheet(false));
     this.peek = [...root.querySelectorAll<HTMLImageElement>('.v-peek-img')];
 
@@ -351,6 +363,7 @@ export class Viewer {
     this.nameEl.textContent = tag ? `${p.name} + ${tag}` : p.name;
     this.posEl.textContent = `${i + 1} / ${this.list.length}`;
     this.refreshStar();
+    this.refreshComments();
     this.strip.setCurrent(i);
 
     const info = this.infoCache.get(p.path);
@@ -668,7 +681,7 @@ export class Viewer {
     if (info?.taken) parts.push(info.taken);
     if (info?.camera) parts.push(info.camera);
     if (info?.exposure) parts.push(info.exposure);
-    parts.push(p.dir);
+    if (!p.remote) parts.push(p.dir);
     this.infoEl.textContent = parts.join('   ·   ');
     // 信息面板：第一行是拍摄时间（大字），下面文件名、尺寸、相机、曝光
     const rows: string[] = [];
@@ -688,10 +701,122 @@ export class Viewer {
     );
   }
 
-  /** 信息面板（学 iPhone：点 ⓘ 或往上推照片） */
-  private toggleSheet(open = !this.root.classList.contains('sheet-open')): void {
+  /** 底部面板（学 iPhone：点 ⓘ 或往上推照片看信息；点留言按钮看留言）。再点同一个按钮收起 */
+  private toggleSheet(open?: boolean, mode: 'info' | 'comments' = this.sheetMode): void {
+    const isOpen = this.root.classList.contains('sheet-open');
+    if (open === undefined) open = !(isOpen && mode === this.sheetMode);
+    this.sheetMode = mode;
+    this.root.classList.toggle('sheet-comments', mode === 'comments');
     this.root.classList.toggle('sheet-open', open);
     if (open) this.root.classList.remove('bare');
+    if (open && mode === 'comments') this.renderComments(true);
+  }
+
+  private sheetMode: 'info' | 'comments' = 'info';
+  private cmtList!: HTMLElement;
+  private cmtInput!: HTMLTextAreaElement;
+
+  /** 留言区：上面是列表，下面是输入框 + 发送 */
+  private buildCommentForm(): void {
+    this.cmtEl.innerHTML = `<div class="v-cmt-head">${esc(t('留言'))}</div><div class="v-cmt-list"></div>
+      <form class="v-cmt-form"><textarea rows="1" maxlength="500" placeholder="${esc(t('写留言，大家都能看到'))}"></textarea>
+      <button class="btn primary" type="submit">${esc(t('发送'))}</button></form>`;
+    this.cmtList = this.cmtEl.querySelector('.v-cmt-list')!;
+    this.cmtInput = this.cmtEl.querySelector('textarea')!;
+    const form = this.cmtEl.querySelector('form')!;
+    const grow = () => {
+      this.cmtInput.style.height = 'auto';
+      this.cmtInput.style.height = `${Math.min(120, this.cmtInput.scrollHeight)}px`;
+    };
+    this.cmtInput.addEventListener('input', grow);
+    // 回车发送，Shift+回车换行；输入法选字时的回车不算
+    this.cmtInput.addEventListener('keydown', (e) => {
+      e.stopPropagation(); // 打字时空格、方向键不能翻页 / 加星
+      if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+        e.preventDefault();
+        form.requestSubmit();
+      } else if (e.key === 'Escape') {
+        this.cmtInput.blur();
+      }
+    });
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const p = this.current;
+      const text = this.cmtInput.value.trim();
+      if (!p?.remote || !text) return;
+      const btn = form.querySelector('button')!;
+      btn.disabled = true;
+      try {
+        await remote.addComment(p.path, text);
+        this.cmtInput.value = '';
+        grow();
+        p.comments = remote.commentCount(p.remote.code, p.remote.id);
+        this.refreshComments();
+        this.cmtList.scrollTop = this.cmtList.scrollHeight;
+      } catch (err) {
+        toast(err instanceof Error ? err.message : String(err), 'error');
+      } finally {
+        btn.disabled = false;
+      }
+    });
+    this.cmtList.addEventListener('click', async (e) => {
+      const b = (e.target as HTMLElement).closest<HTMLElement>('.v-cmt-del');
+      const p = this.current;
+      if (!b || !p?.remote) return;
+      try {
+        await remote.deleteComment(p.remote.code, Number(b.dataset.id));
+        p.comments = remote.commentCount(p.remote.code, p.remote.id);
+        this.refreshComments();
+      } catch (err) {
+        toast(err instanceof Error ? err.message : String(err), 'error');
+      }
+    });
+  }
+
+  /** 留言按钮上的条数、留言列表（换了照片、别人留言/删除时调用） */
+  refreshComments(): void {
+    const p = this.current;
+    const on = !!p?.remote;
+    const n = on ? remote.commentsOf(p!.path).length : 0;
+    this.cmtBtn.hidden = this.barCmt.hidden = !on;
+    this.cmtBtn.innerHTML = `${ICONS.bubble}<span>${n || t('留言')}</span>`;
+    this.barCmt.innerHTML = `${ICON_BUBBLE}${n ? `<span class="n">${n}</span>` : ''}`;
+    if (!on && this.sheetMode === 'comments') this.toggleSheet(false, 'info');
+    if (this.sheetMode === 'comments') this.renderComments(false);
+  }
+
+  private renderComments(focus: boolean): void {
+    const p = this.current;
+    if (!p?.remote) return;
+    const list = remote.commentsOf(p.path);
+    const atBottom = this.cmtList.scrollTop + this.cmtList.clientHeight >= this.cmtList.scrollHeight - 4;
+    this.cmtList.replaceChildren(
+      ...(list.length
+        ? list.map((c) => {
+            const d = document.createElement('div');
+            d.className = 'v-cmt-item';
+            const text = document.createElement('div');
+            text.className = 'v-cmt-text';
+            text.textContent = c.text;
+            const meta = document.createElement('div');
+            meta.className = 'v-cmt-meta';
+            meta.textContent = timeAgo(c.at);
+            if (remote.canDelete(p.remote!.code, c.id)) {
+              const del = document.createElement('button');
+              del.className = 'v-cmt-del';
+              del.dataset.id = String(c.id);
+              del.textContent = t('删除');
+              meta.append(del);
+            }
+            d.append(text, meta);
+            return d;
+          })
+        : [Object.assign(document.createElement('div'), { className: 'v-cmt-empty dim', textContent: t('还没有留言') })]),
+    );
+    if (atBottom || focus) this.cmtList.scrollTop = this.cmtList.scrollHeight;
+    // 电脑上点开就能直接打字；手机上不自动弹键盘（会把照片顶没了）
+    // （等面板滑出来再聚焦：隐藏着的输入框聚焦不了）
+    if (focus && !this.byTouch) window.setTimeout(() => this.cmtInput.focus({ preventScroll: true }), 60);
   }
 
   // ---------------------------------------------------------------------------
@@ -820,7 +945,7 @@ export class Viewer {
           if (dy > 100 || (dt < 300 && dy > 50)) this.swipeClose();
           else this.springBack();
         } else if (sw.axis === 'up') {
-          if (dy < -40) this.toggleSheet(true);
+          if (dy < -40) this.toggleSheet(true, 'info');
         } else if (Math.abs(dx) < 10 && Math.abs(dy) < 10) {
           this.onTap(e);
         }
@@ -1109,3 +1234,16 @@ const ICON_STAR_ON =
   '<svg viewBox="0 0 24 24" width="26" height="26" fill="currentColor" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M12 3.2l2.7 5.6 6.1.8-4.5 4.2 1.1 6.1L12 17l-5.4 2.9 1.1-6.1-4.5-4.2 6.1-.8z"/></svg>';
 const ICON_INFO =
   '<svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="9.2"/><path d="M12 11v6"/><circle cx="12" cy="7.6" r="0.6" fill="currentColor"/></svg>';
+const ICON_BUBBLE =
+  '<svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M20 12a8 8 0 0 1-11.6 7.1L4 20l1-4.2A8 8 0 1 1 20 12z"/></svg>';
+
+/** 留言时间：刚刚 / 5 分钟前 / 3 小时前 / 10月24日 14:05 */
+function timeAgo(sec: number): string {
+  const d = Math.max(0, Date.now() / 1000 - sec);
+  if (d < 60) return t('刚刚');
+  if (d < 3600) return t('{n} 分钟前', { n: Math.floor(d / 60) });
+  if (d < 86400) return t('{n} 小时前', { n: Math.floor(d / 3600) });
+  const dt = new Date(sec * 1000);
+  const hm = `${String(dt.getHours()).padStart(2, '0')}:${String(dt.getMinutes()).padStart(2, '0')}`;
+  return t('{m}月{d}日 {hm}', { m: dt.getMonth() + 1, d: dt.getDate(), hm });
+}
