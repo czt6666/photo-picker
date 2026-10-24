@@ -120,6 +120,14 @@ kbd {
 .btn.primary:hover:not(:disabled) {
   background: #6199ff;
 }
+/* 删除这类收不回来的操作，确认按钮用红色 */
+.btn.primary.danger {
+  background: #e5484d;
+  border-color: #e5484d;
+}
+.btn.primary.danger:hover:not(:disabled) {
+  background: #f05a5f;
+}
 .btn.icon {
   padding: 5px 9px;
 }

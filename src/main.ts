@@ -802,12 +802,14 @@ gridEl.addEventListener('contextmenu', (e) => {
   if (!store.selection.has(p.path)) grid.selectIndex(i, 'single');
   const targets = starTargets();
   const allStarred = targets.every((x) => x.starred);
-  const items = [
+  const items: MenuItem[] = [
     { label: t('查看大图'), action: () => openViewer(i) },
     { label: allStarred ? t('取消星标') : t('加星标'), action: () => void toggleStar(targets) },
   ];
   if (isTauri && !isRemotePath(p.path)) items.push({ label: REVEAL_LABEL, action: () => void revealItemInDir(p.path).catch(() => {}) });
   if (isTauri) items.push({ label: t('导出'), action: () => openExportDialog(onMoved) });
+  const ra = p.remote ? remote.get(p.remote.code) : undefined;
+  if (ra?.ownerToken) items.push({ label: t('从相册里删除'), danger: true, action: () => void deleteFromAlbum(ra, targets) });
   contextMenu(e.clientX, e.clientY, items);
 });
 
@@ -883,17 +885,36 @@ async function connectAndOpen(link: string): Promise<boolean> {
   }
 }
 
-/** 当前远程相册的管理菜单项：分享、继续上传、改名、删除（后三个只有创建者有） */
+/** 选中的照片从远程相册里删掉（只有创建者能删）；删完服务器推 deleted，各端自己刷新 */
+async function deleteFromAlbum(a: RemoteAlbum, photos: Photo[]): Promise<void> {
+  const ids = photos.filter((p) => p.remote?.code === a.code).map((p) => p.remote!.id);
+  if (!ids.length) return void toast(t('先选中要删的照片'), 'warn');
+  if (!(await confirmBox(t('从相册里删除 {n} 张照片？', { n: ids.length }), t('线上图片、星标和留言都会删掉，原图不受影响'), t('删除')))) return;
+  try {
+    await remote.deletePhotos(a.code, ids);
+    store.selection.clear();
+  } catch (e) {
+    toast(e instanceof Error ? e.message : String(e), 'error');
+  }
+}
+
+/** 当前远程相册的管理菜单项：继续上传、从相册里删除、删除该相册（都只有创建者有） */
 function remoteItems(a: RemoteAlbum): MenuItem[] {
   const code = a.code;
   const owner = !!a.ownerToken;
+  const sel = starTargets();
   return [
-    { label: t('刷新'), action: () => void reloadRemote() },
     ...(owner
       ? [
           uploadingCode() === code
             ? { label: t('停止上传'), action: () => stopUpload() }
             : { label: t('继续上传'), detail: a.sourceDir ? baseName(a.sourceDir) : '', action: () => void continueUpload(a, progress) },
+          {
+            label: t('从相册里删除'),
+            detail: sel.length ? t('{n} 张', { n: sel.length }) : '',
+            disabled: !sel.length,
+            action: () => void deleteFromAlbum(a, sel),
+          },
           {
             label: t('删除该相册'),
             danger: true,
