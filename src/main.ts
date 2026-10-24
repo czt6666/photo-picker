@@ -16,7 +16,18 @@ import { LANGS, langPref, setLang, t, translateDom, type Lang } from './i18n';
 import { closeMenu, contextMenu, esc, toast, type MenuItem } from './ui';
 import { formatBytes, Viewer } from './viewer';
 import { isBrowserShortcut, isMac, isTauri, isTouch, isWeb, mod as modKey, MOD_NAME, REVEAL_LABEL } from './platform';
-import { isRemotePath, parseRemotePath, parseShareInput, remote, SERVER, type RemoteAlbum, type RemoteEvent } from './remote';
+import {
+  albumPath,
+  folderPath,
+  isRemotePath,
+  parseRemotePath,
+  parseShareInput,
+  remote,
+  SERVER,
+  type RemoteAlbum,
+  type RemoteEvent,
+  type ServerComment,
+} from './remote';
 import { confirmBox, continueUpload, showConnect, showCreate, showShare, stopUpload, uploadingCode } from './remoteUi';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -930,7 +941,69 @@ async function openRemote(code: string): Promise<boolean> {
   }
   applyWorkdir(lib);
   await openInitialView(lib);
+  notifyUnreadOnOpen(code);
   return true;
+}
+
+// ---------- 留言通知：顶部横幅，点一下跳到那张照片的留言 ----------
+
+let bannerTimer = 0;
+function showBanner(thumb: string | null, who: string, text: string, onClick: () => void, ms = 6000): void {
+  document.querySelector('.banner')?.remove();
+  clearTimeout(bannerTimer);
+  const b = document.createElement('div');
+  b.className = 'banner';
+  b.innerHTML = `${thumb ? `<img alt="">` : `<span class="b-ico">${ICONS.bubble}</span>`}<div class="b-body"><div class="b-who"></div><div class="b-text"></div></div><button class="b-close" title="${t('关闭')}">×</button>`;
+  if (thumb) b.querySelector('img')!.src = thumb;
+  b.querySelector('.b-who')!.textContent = who;
+  b.querySelector('.b-text')!.textContent = text;
+  const close = () => {
+    clearTimeout(bannerTimer);
+    b.classList.add('out');
+    window.setTimeout(() => b.remove(), 250);
+  };
+  b.addEventListener('click', (e) => {
+    close();
+    if (!(e.target as HTMLElement).closest('.b-close')) onClick();
+  });
+  document.body.appendChild(b);
+  bannerTimer = window.setTimeout(close, ms);
+}
+
+/** 跳到某张远程照片并打开它的留言：不在当前网格里就先打开它所在的相册 */
+async function goToComment(code: string, photoId: number): Promise<void> {
+  if (remote.active !== code) return;
+  const path = `${albumPath(code)}#${photoId}`;
+  const info = remote.photoInfo(path);
+  if (!info) return;
+  if (viewer.opened) viewer.close();
+  if (store.indexOf(path) < 0) await openFolder(folderPath(code, info.folder));
+  const i = store.indexOf(path);
+  if (i < 0) return;
+  grid.selectIndex(i, 'single');
+  openViewer(i);
+  viewer.showComments();
+}
+
+/** 别人刚留了言：正在看的这张、留言栏也开着，就不打扰了 */
+function notifyComment(code: string, c: ServerComment): void {
+  // 自己发的留言，推送可能比发送请求的回应先到：稍等一下再判断是不是自己的
+  window.setTimeout(() => {
+    if (remote.active !== code || remote.isMine(code, c.id)) return;
+    if (viewer.opened && viewer.current?.remote?.id === c.photo_id && document.querySelector('.viewer.sheet-open.sheet-comments')) return;
+    const info = remote.photoInfo(`${albumPath(code)}#${c.photo_id}`);
+    const thumb = info ? `${remote.toPhoto(code, info).remote!.img}_t.jpg` : null;
+    showBanner(thumb, c.name || t('有人留言'), c.text, () => void goToComment(code, c.photo_id));
+  }, 500);
+}
+
+/** 刚打开相册：离开这段时间有几条新留言 */
+function notifyUnreadOnOpen(code: string): void {
+  const list = remote.unreadComments(code);
+  if (!list.length) return;
+  const first = list[0];
+  const text = list.length === 1 ? first.text : t('点一下从最早的一条开始看');
+  showBanner(null, t('有 {n} 条新留言', { n: list.length }), text, () => void goToComment(code, first.photo_id), 10000);
 }
 
 async function connectAndOpen(link: string): Promise<boolean> {
@@ -1038,6 +1111,7 @@ function onRemoteEvent(code: string, ev: RemoteEvent): void {
       updateStatus();
     }
   } else if (ev.type === 'comment' || ev.type === 'comment_deleted') {
+    if (ev.type === 'comment') notifyComment(code, ev.comment);
     // 留言数显示在格子上，看大图时留言列表跟着刷新
     for (const p of store.all)
       if (p.remote?.code === code) {

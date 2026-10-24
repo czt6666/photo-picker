@@ -803,6 +803,11 @@ export class Viewer {
     if (this.sheetMode === 'comments') this.renderComments(false);
   }
 
+  /** 打开留言栏（从通知横幅跳过来时用） */
+  showComments(): void {
+    this.toggleSheet(true, 'comments');
+  }
+
   /** 有没看过的留言：留言按钮标红 */
   private refreshUnread(): void {
     const u = !!this.current?.unread;

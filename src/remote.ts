@@ -447,6 +447,18 @@ class Remote {
     return n;
   }
 
+  /** 这条留言是不是这台设备发的 */
+  isMine(code: string, commentId: number): boolean {
+    return !!this.commentTokens[`${code}:${commentId}`];
+  }
+
+  /** 整个相册里别人留的、还没看过的留言，按时间先后 */
+  unreadComments(code: string): ServerComment[] {
+    return (this.comments.get(code) ?? []).filter(
+      (c) => c.id > (this.seenComments[`${code}:${c.photo_id}`] ?? 0) && !this.isMine(code, c.id),
+    );
+  }
+
   /** 看过这张照片的留言了 */
   markCommentsSeen(code: string, photoId: number): void {
     const key = `${code}:${photoId}`;
