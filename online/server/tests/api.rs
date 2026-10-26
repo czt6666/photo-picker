@@ -153,6 +153,18 @@ async fn shared_album_with_live_stars() {
     assert_eq!(v["photos"][0]["companions"], json!(["DSC.NEF"]));
     assert_eq!(v["photos"][1]["starred"], false);
 
+    // 星级：和星标一样共用一份、实时推送；没变的不算改动，超过 5 不收
+    let (s, v) = call(&srv, "PUT", &format!("/api/albums/{code}/ratings"), &[], Some(json!({ "ids": [p1, 99999], "rating": 4 }))).await;
+    assert_eq!(s, 200);
+    assert_eq!(v["changed"], json!([p1]));
+    assert_eq!(next_json(&mut a, "ratings").await, json!({ "type": "ratings", "ids": [p1], "rating": 4 }));
+    let (_, v) = call(&srv, "PUT", &format!("/api/albums/{code}/ratings"), &[], Some(json!({ "ids": [p1, p2], "rating": 4 }))).await;
+    assert_eq!(v["changed"], json!([p2]));
+    let (s, _) = call(&srv, "PUT", &format!("/api/albums/{code}/ratings"), &[], Some(json!({ "ids": [p1], "rating": 6 }))).await;
+    assert_eq!(s, 400);
+    let (_, v) = call(&srv, "GET", &format!("/api/albums/{code}"), &[], None).await;
+    assert_eq!(v["photos"][0]["rating"], 4);
+
     // 图片可直接取，且可长期缓存、可跨域
     let (s, body, head) = http(&srv, "GET", &format!("/img/{album_id}/{p1}_p.jpg"), &[("Origin", "tauri://localhost")], vec![], "").await;
     assert_eq!(s, 200);

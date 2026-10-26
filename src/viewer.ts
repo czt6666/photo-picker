@@ -252,8 +252,6 @@ export class Viewer {
     this.barStar.innerHTML = p.starred ? ICON_STAR_ON : ICON_STAR;
     this.barStar.classList.toggle('on', p.starred);
     this.rateEl.querySelectorAll('button').forEach((b) => b.classList.toggle('on', Number(b.dataset.n) <= p.rating));
-    // 远程相册没有星级，这排星星就不显示
-    this.rateEl.style.display = p.remote ? 'none' : '';
     this.strip.refresh();
   }
 

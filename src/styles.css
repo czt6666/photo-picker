@@ -286,6 +286,12 @@ body.resizing * {
   color: var(--star);
   font-size: 11px;
 }
+/* 电脑上星标筛选在底栏；手机没有底栏，还留在侧栏 */
+@media (min-width: 761px) {
+  .sb-starred {
+    display: none;
+  }
+}
 /* 星标筛选开着：“已加星标的照片”保持按下的样子，右边的 ✕ 提示再点一次就关掉 */
 .sb-starred.on {
   box-shadow: inset 0 0 0 1px rgba(255, 197, 49, 0.45);
@@ -594,6 +600,49 @@ body.drop-target .content::after {
 .zoom input {
   width: 120px;
   accent-color: var(--accent);
+}
+
+/* 底栏左边的筛选：星标开关 + 星级（只看几星及以上） */
+.filters {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.btn.filt {
+  padding: 3px 10px;
+}
+.btn.filt.on {
+  background: rgba(255, 197, 49, 0.1);
+}
+.rate-filter {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 4px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.rate-filter.active {
+  border-color: rgba(255, 255, 255, 0.35);
+}
+.rate-filter button {
+  border: none;
+  background: none;
+  padding: 1px 2px;
+  font-size: 14px;
+  line-height: 1;
+  color: rgba(255, 255, 255, 0.22);
+  cursor: pointer;
+  transition: color 0.12s var(--ios);
+}
+.rate-filter button.on {
+  color: #fff;
+}
+/* 鼠标移上去先预览：指着第 n 颗，就亮前 n 颗 */
+.rate-filter:hover button {
+  color: rgba(255, 255, 255, 0.75);
+}
+.rate-filter button:hover ~ button {
+  color: rgba(255, 255, 255, 0.22);
 }
 
 /* ---------- 看图器 ---------- */
@@ -1693,6 +1742,10 @@ body.touch .badge {
   color: #fff;
   background: rgba(0, 0, 0, 0.6);
   pointer-events: none;
+}
+/* 既有星级又有留言：留言数叠在星级上面 */
+.rate:not([hidden]) ~ .cmt {
+  bottom: 24px;
 }
 .cmt[hidden] {
   display: none;

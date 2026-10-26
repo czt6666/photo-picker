@@ -14,7 +14,7 @@ export type View = { kind: 'folder'; path: string; starredOnly?: boolean } | { k
 /** 网格最上面那一栏：有没看过的留言的照片先挪到这里，看完（关掉大图时）回到原来的位置；没有就不显示这一栏 */
 export const UNREAD_SECTION = '\u0000unread';
 
-/** 星标筛选是否开着（侧栏“已加星标的照片”处于按下状态） */
+/** 星标筛选是否开着（底栏“★ 星标”/ 手机侧栏“已加星标的照片”处于按下状态） */
 export const isStarMode = (v: View): boolean => v.kind === 'starred' || (v.kind === 'folder' && !!v.starredOnly);
 
 type Topic = 'library' | 'photos' | 'selection' | 'stars' | 'view';
@@ -25,13 +25,15 @@ class Store {
   view: View = { kind: 'none' };
   /** 当前视图的全部照片：打开的相册，加上连续翻动时接在后面的相册（星标汇总则是所有星标照片） */
   all: Photo[] = [];
-  /** 经过搜索过滤（星标筛选下还要去掉没星标的）后的照片，网格和看图器都基于它 */
+  /** 经过搜索过滤（星标筛选下还要去掉没星标的，星级筛选下去掉星级不够的）后的照片，网格和看图器都基于它 */
   visible: Photo[] = [];
   /** visible 按相册切成的段 */
   sections: Section[] = [];
   /** 未读留言那一栏插在哪个相册前面（点开的那个相册） */
   unreadBefore: string | null = null;
   query = '';
+  /** 星级筛选：只看这个星级及以上的照片，0 = 不筛 */
+  minRating = 0;
   selection = new Set<string>();
   /** Shift 连选的起点 */
   anchor: string | null = null;
@@ -93,7 +95,8 @@ class Store {
     // 星标筛选下，取消了星标的照片也要消失
     const onlyStar = isStarMode(this.view);
     const match = (p: Photo) => !q || p.name.toLowerCase().includes(q) || p.companions.some((c) => c.toLowerCase().includes(q));
-    const shown = this.all.filter((p) => (!onlyStar || p.starred) && match(p));
+    const min = this.minRating;
+    const shown = this.all.filter((p) => (!onlyStar || p.starred) && p.rating >= min && match(p));
     const unread = shown.filter((p) => p.unread);
     if (unread.length) {
       // 未读那一栏放在点开的那个相册上面；往上接的相册排在它前面，往上滑照样能翻到

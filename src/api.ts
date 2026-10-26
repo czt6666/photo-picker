@@ -36,7 +36,11 @@ export const api = {
     return res;
   },
   /** 星级：0 = 清除，1～5。不动星标。返回 true = 文件夹不可写，存到了 App 数据目录 */
-  setRating: (paths: string[], rating: number) => local<boolean>('set_rating', { paths: paths.filter((p) => !isRemotePath(p)), rating }),
+  setRating: async (paths: string[], rating: number): Promise<boolean> => {
+    const { locals, remotes } = split(paths);
+    if (remotes.length) await remote.setRating(remotes, rating);
+    return locals.length ? local<boolean>('set_rating', { paths: locals, rating }) : false;
+  },
   /** 选片清单（文本或文件路径）→ 本机对应照片 */
   matchPickList: (text: string | null, file: string | null) => local<PickListMatch>('match_pick_list', { text, file }),
   photoInfo: (path: string): Promise<PhotoInfo> => {

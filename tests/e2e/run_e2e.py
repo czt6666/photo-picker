@@ -135,8 +135,8 @@ def run(d, env, export_dir):
     check("侧栏列出 3 个含照片的文件夹", len(rows) == 3, str(rows))
     trip = next((r for r in rows if "旅行" in r), "")
     check("从 Picasa 的 .picasa.ini 读到 3 个星标", "★3" in trip, trip)
-    starred_total = d.find_element(By.CSS_SELECTOR, ".sb-starred .count").text
-    check("“已加星标的照片”合计 3", starred_total == "3", starred_total)
+    starred_total = d.find_element(By.CSS_SELECTOR, "#btn-starred .n").text.strip()
+    check("底栏星标合计 3", starred_total == "3", starred_total)
     wd = js(d, "return document.querySelector('.sb-workdir').innerText.replace(/\\s+/g, ' ')")
     check("侧栏显示工作目录及相册数", "photos" in wd and "3 个相册" in wd, wd)
 
@@ -160,26 +160,26 @@ def run(d, env, export_dir):
 
     # Shift+S：跳到“已加星标的照片”，再按一次回到刚才的相册
     ActionChains(d).key_down(Keys.SHIFT).send_keys("S").key_up(Keys.SHIFT).perform()
-    ok = wait(lambda: "3 张" in d.find_element(By.ID, "status-count").text and d.find_elements(By.CSS_SELECTOR, ".sb-starred.active"))
+    ok = wait(lambda: "3 张" in d.find_element(By.ID, "status-count").text and "已加星标的照片" in d.find_element(By.ID, "view-title").text)
     check("Shift+S 切到星标相册，只剩 3 张", ok, d.find_element(By.ID, "status-count").text)
     d.save_screenshot(str(SHOTS / "02-starred-only.png"))
     ActionChains(d).key_down(Keys.SHIFT).send_keys("S").key_up(Keys.SHIFT).perform()
     ok = wait(lambda: "300 张" in d.find_element(By.ID, "status-count").text)
     check("再按 Shift+S 回到原相册", ok, d.find_element(By.ID, "status-count").text)
 
-    # 星标筛选：点“已加星标的照片”打开，侧栏只剩有星标的相册；点相册看它的星标照片；再点一次关掉
+    # 星标筛选：点底栏“★ 星标”打开，侧栏只剩有星标的相册；点相册看它的星标照片；再点一次关掉
     folder_rows = lambda: js(d, "return [...document.querySelectorAll('.sb-item[data-path]')].map(e => e.dataset.path.split('/').pop())")  # noqa: E731
-    d.find_element(By.CSS_SELECTOR, ".sb-starred").click()
+    d.find_element(By.ID, "btn-starred").click()
     ok = wait(lambda: "3 张" in d.find_element(By.ID, "status-count").text and folder_rows() == ["旅行"])
     check("星标筛选打开：侧栏只列有星标的相册", ok, str(folder_rows()))
     open_folder(d, "旅行")
     ok = wait(lambda: "3 张" in d.find_element(By.ID, "status-count").text and "仅星标" in d.find_element(By.ID, "view-title").text
-              and d.find_elements(By.CSS_SELECTOR, ".sb-starred.on") and d.find_elements(By.CSS_SELECTOR, ".sb-item.active[data-path]"))
+              and d.find_elements(By.CSS_SELECTOR, "#btn-starred.on") and d.find_elements(By.CSS_SELECTOR, ".sb-item.active[data-path]"))
     check("星标筛选下点相册：只看这个相册的星标照片", ok, d.find_element(By.ID, "view-title").text)
-    d.find_element(By.CSS_SELECTOR, ".sb-starred").click()
+    d.find_element(By.ID, "btn-starred").click()
     ok = wait(lambda: "300 张" in d.find_element(By.ID, "status-count").text and len(folder_rows()) == 3
-              and not d.find_elements(By.CSS_SELECTOR, ".sb-starred.on"))
-    check("再点一次“已加星标的照片”：取消筛选，留在当前相册", ok, f"{d.find_element(By.ID, 'status-count').text} {folder_rows()}")
+              and not d.find_elements(By.CSS_SELECTOR, "#btn-starred.on"))
+    check("再点一次底栏“★ 星标”：取消筛选，留在当前相册", ok, f"{d.find_element(By.ID, 'status-count').text} {folder_rows()}")
 
     # 拖动侧栏分隔条改宽度，顶栏工作目录区跟着变、两者一样宽
     # 分隔条本身 0 宽（只靠伸出的透明区接鼠标），所以从侧栏中心往右偏到右边缘内 2px 处按下
@@ -210,8 +210,8 @@ def run(d, env, export_dir):
     ActionChains(d).send_keys(Keys.SPACE).perform()  # 全部已加星 → 全部取消
     ok = wait(lambda: ini.read_text().count("star=yes") == 2)
     check("再按空格：全部取消星标，原有 faces 等字段保留", ok and "faces=rect64" in ini.read_text(), ini.read_text().replace("\r\n", " | "))
-    side = wait(lambda: d.find_element(By.CSS_SELECTOR, ".sb-starred .count").text == "2")
-    check("侧栏星标总数随之更新", side)
+    side = wait(lambda: d.find_element(By.CSS_SELECTOR, "#btn-starred .n").text.strip() == "2")
+    check("底栏星标总数随之更新", side)
 
     # 点过状态栏的“星标”按钮后焦点留在按钮上，再按空格：只能切换一次（不能“按钮被空格点一次 + 快捷键一次”抵消掉）
     d.find_element(By.CSS_SELECTOR, '.cell[data-i="4"]').click()
@@ -305,7 +305,7 @@ def run(d, env, export_dir):
     check("Esc 返回网格，光标停在刚看的照片上", ok and focused == "4", f"focused={focused}")
 
     # ---------- 星标相册 ----------
-    d.find_element(By.CSS_SELECTOR, ".sb-starred").click()
+    d.find_element(By.ID, "btn-starred").click()
     ok = wait(lambda: "3 张" in d.find_element(By.ID, "status-count").text)
     check("“已加星标的照片”汇总所有文件夹的 3 张", ok, d.find_element(By.ID, "status-count").text)
     d.save_screenshot(str(SHOTS / "07-starred-album.png"))

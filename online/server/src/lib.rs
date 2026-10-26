@@ -84,6 +84,7 @@ pub fn app(cfg: Config) -> Result<Router, String> {
         )
         .route("/albums/{code}/photos/delete", post(delete_photos))
         .route("/albums/{code}/stars", put(set_stars))
+        .route("/albums/{code}/ratings", put(set_rating))
         .route("/albums/{code}/photos/{id}/comments", post(add_comment))
         .route("/albums/{code}/comments/{id}", axum::routing::delete(delete_comment))
         .route("/albums/{code}/ws", get(ws))
@@ -527,6 +528,27 @@ async fn set_stars(State(st): S, ClientIp(ip): ClientIp, UrlPath(code): UrlPath<
     let changed = st.db.set_stars(&a.id, &req.ids, req.starred, &by)?;
     if !changed.is_empty() {
         st.hub.send(&a.id, json!({ "type": "stars", "ids": changed, "starred": req.starred, "by": by }));
+    }
+    Ok(Json(json!({ "changed": changed })))
+}
+
+#[derive(Deserialize)]
+struct RatingReq {
+    ids: Vec<i64>,
+    rating: u8,
+}
+
+async fn set_rating(State(st): S, ClientIp(ip): ClientIp, UrlPath(code): UrlPath<String>, Json(req): Json<RatingReq>) -> ApiResult {
+    let a = album(&st, ip, &code)?;
+    if req.ids.len() > 10_000 {
+        return Err(ApiError::bad("一次太多了"));
+    }
+    if req.rating > 5 {
+        return Err(ApiError::bad("星级只能是 0～5"));
+    }
+    let changed = st.db.set_rating(&a.id, &req.ids, req.rating)?;
+    if !changed.is_empty() {
+        st.hub.send(&a.id, json!({ "type": "ratings", "ids": changed, "rating": req.rating }));
     }
     Ok(Json(json!({ "changed": changed })))
 }

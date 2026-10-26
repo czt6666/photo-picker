@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS photos (
   width      INTEGER NOT NULL,
   height     INTEGER NOT NULL,
   size       INTEGER NOT NULL,
+  rating     INTEGER NOT NULL DEFAULT 0,
   UNIQUE (album_id, key)
 );
 CREATE TABLE IF NOT EXISTS stars (
@@ -95,6 +96,8 @@ pub struct Photo {
     pub starred: bool,
     /// 最后是谁加的星
     pub starred_by: Option<String>,
+    /// 星级 0～5（0 = 没打），和星标一样大家共用一份
+    pub rating: u8,
 }
 
 /// 一条留言：挂在某张照片下面，拿到链接的人都能留。名字是留言的人自己填的（不填前端随机起一个），不做校验
@@ -138,7 +141,7 @@ fn album_row(r: &rusqlite::Row) -> rusqlite::Result<Album> {
     Ok(Album { id: r.get(0)?, code: r.get(1)?, name: r.get(2)?, owner_token: r.get(3)?, created_at: r.get(4)? })
 }
 
-const PHOTO_SELECT: &str = "SELECT p.id, p.name, p.folder, p.companions, p.width, p.height, p.size, s.by
+const PHOTO_SELECT: &str = "SELECT p.id, p.name, p.folder, p.companions, p.width, p.height, p.size, s.by, p.rating
      FROM photos p LEFT JOIN stars s ON s.photo_id = p.id";
 
 fn photo_row(r: &rusqlite::Row) -> rusqlite::Result<Photo> {
@@ -154,6 +157,7 @@ fn photo_row(r: &rusqlite::Row) -> rusqlite::Result<Photo> {
         size: r.get::<_, i64>(6)? as u64,
         starred: by.is_some(),
         starred_by: by,
+        rating: r.get::<_, i64>(8)?.clamp(0, 5) as u8,
     })
 }
 
@@ -168,6 +172,14 @@ impl Db {
             > 0;
         if !has_name {
             conn.execute_batch("ALTER TABLE comments ADD COLUMN name TEXT NOT NULL DEFAULT ''").map_err(e)?;
+        }
+        // v0.5.0 及以前远程相册没有星级
+        let has_rating: bool = conn
+            .query_row("SELECT COUNT(*) FROM pragma_table_info('photos') WHERE name = 'rating'", [], |r| r.get::<_, i64>(0))
+            .map_err(e)?
+            > 0;
+        if !has_rating {
+            conn.execute_batch("ALTER TABLE photos ADD COLUMN rating INTEGER NOT NULL DEFAULT 0").map_err(e)?;
         }
         Ok(Db { conn: Mutex::new(conn) })
     }
@@ -278,6 +290,26 @@ impl Db {
                 tx.execute("DELETE FROM stars WHERE photo_id = ?1", [id])
             }
             .map_err(e)?;
+            if n > 0 {
+                changed.push(*id);
+            }
+        }
+        tx.commit().map_err(e)?;
+        Ok(changed)
+    }
+
+    /// 打星级（0 = 清除）。只改属于这个相册、星级真的变了的照片，返回改到的 id。
+    pub fn set_rating(&self, album_id: &str, ids: &[i64], rating: u8) -> R<Vec<i64>> {
+        let mut c = self.conn.lock();
+        let tx = c.transaction().map_err(e)?;
+        let mut changed = vec![];
+        for id in ids {
+            let n = tx
+                .execute(
+                    "UPDATE photos SET rating = ?3 WHERE album_id = ?1 AND id = ?2 AND rating != ?3",
+                    params![album_id, id, rating],
+                )
+                .map_err(e)?;
             if n > 0 {
                 changed.push(*id);
             }

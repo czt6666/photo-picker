@@ -63,6 +63,8 @@ export interface ServerPhoto {
   size: number;
   starred: boolean;
   starred_by: string | null;
+  /** 星级 0～5（老服务器没有这个字段） */
+  rating?: number;
 }
 
 /** 照片下的一条留言（不记名字） */
@@ -84,6 +86,7 @@ interface ServerAlbum {
 
 export type RemoteEvent =
   | { type: 'stars'; ids: number[]; starred: boolean; by: string }
+  | { type: 'ratings'; ids: number[]; rating: number }
   | { type: 'photos'; photos: ServerPhoto[] }
   | { type: 'deleted'; ids: number[] }
   | { type: 'presence'; names: string[] }
@@ -264,7 +267,7 @@ class Remote {
       size: p.size,
       mtime: 0,
       starred: p.starred,
-      rating: 0,
+      rating: p.rating ?? 0,
       companions: p.companions,
       starredBy: p.starred_by,
       comments: this.commentCount(code, p.id),
@@ -401,6 +404,28 @@ class Remote {
     this.recount(code);
   }
 
+  /** 打星级（0 = 清除），大家共用一份 */
+  async setRating(paths: string[], rating: number): Promise<void> {
+    const byCode = new Map<string, number[]>();
+    for (const p of paths) {
+      const { code, id } = parseRemotePath(p);
+      if (id === null) continue;
+      if (!byCode.has(code)) byCode.set(code, []);
+      byCode.get(code)!.push(id);
+    }
+    for (const [code, ids] of byCode) {
+      const a = this.get(code);
+      if (!a) continue;
+      await this.call(a, 'PUT', `/albums/${code}/ratings`, { ids, rating });
+      this.applyRating(code, ids, rating);
+    }
+  }
+
+  private applyRating(code: string, ids: number[], rating: number): void {
+    const set = new Set(ids);
+    for (const p of this.cache.get(code) ?? []) if (set.has(p.id)) p.rating = rating;
+  }
+
   // ---------- 留言 ----------
 
   /** 某张照片下的留言，按时间先后 */
@@ -534,6 +559,7 @@ class Remote {
         return;
       }
       if (ev.type === 'stars') this.applyStars(code, ev.ids, ev.starred, ev.by);
+      else if (ev.type === 'ratings') this.applyRating(code, ev.ids, ev.rating);
       else if (ev.type === 'photos') {
         const list = this.cache.get(code) ?? [];
         for (const p of ev.photos) if (!list.some((x) => x.id === p.id)) list.push(p);

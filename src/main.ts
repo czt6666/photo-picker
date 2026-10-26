@@ -70,6 +70,8 @@ const titleEl = $('view-title');
 const countEl = $('status-count');
 const thumbsEl = $('status-thumbs');
 const zoom = $<HTMLInputElement>('zoom');
+const starredBtn = $('btn-starred');
+const rateFilter = $('rate-filter');
 const search = $<HTMLInputElement>('search');
 
 const grid = new Grid(gridEl, $('grid-inner'), {
@@ -147,6 +149,7 @@ function setLibrary(lib: Library): void {
   }
   shareBtn.hidden = !a;
   document.body.classList.toggle('remote', !!a);
+  renderFilters();
 }
 
 let viewSeq = 0;
@@ -331,7 +334,10 @@ function renderEmpty(): void {
   } else if (store.view.kind === 'none') {
     html = `<div class="empty-card"><p class="dim">${t('从左侧选择一个相册')}</p></div>`;
   } else if (!store.visible.length) {
-    if (store.view.kind === 'starred')
+    // 有照片、只是星级不够：先说星级筛选（不然会误以为相册是空的）
+    if (store.minRating && !store.query && store.all.length)
+      html = `<div class="empty-card"><h2>${t('没有 {n} 星及以上的照片', { n: store.minRating })}</h2><p class="dim">${t('点底栏的星星取消筛选')}</p></div>`;
+    else if (store.view.kind === 'starred')
       html = `<div class="empty-card"><h2>${t('还没有星标')}</h2><p class="dim">${t('按 {key} 加星标', { key: `<kbd>${t('空格')}</kbd>` })}</p></div>`;
     else if (store.view.kind === 'folder' && store.view.starredOnly && !store.query)
       html = `<div class="empty-card"><h2>${t('这个相册没有星标照片')}</h2><p class="dim">${t('按 {key} 取消筛选', { key: '<kbd>Shift+S</kbd>' })}</p></div>`;
@@ -350,7 +356,8 @@ function updateStatus(): void {
   // 连续翻动时列表里接着好几个相册，张数只报正在看的那个
   const v = store.view;
   // （未读留言那一栏里的照片也算回它自己的相册）
-  const shown = v.kind === 'folder' ? store.visible.filter((p) => p.dir === v.path) : store.visible;
+  // 星级筛选开着时报筛出来的总数（筛出来的可能在未读栏或接着的相册里）
+  const shown = v.kind === 'folder' && !store.minRating ? store.visible.filter((p) => p.dir === v.path) : store.visible;
   const total = shown.length;
   const starred = shown.filter((p) => p.starred).length;
   const sel = store.selection.size;
@@ -361,6 +368,40 @@ function updateStatus(): void {
     s += `  ·  ${t('已选 {n} 张（{size}）', { n: sel, size: formatBytes(bytes) })}`;
   }
   countEl.textContent = s;
+  renderFilters();
+}
+
+/** 底栏的筛选：星标开关（带总数）+ 星级（点第 n 颗 = 只看 n 星及以上，再点一次取消） */
+function renderFilters(): void {
+  const on = isStarMode(store.view);
+  starredBtn.classList.toggle('on', on);
+  starredBtn.title = on ? t('关闭星标筛选（Shift+S）') : t('星标筛选（Shift+S）');
+  const n = store.totalStarred();
+  starredBtn.querySelector('.n')!.textContent = n ? ` ${n}` : '';
+  const min = store.minRating;
+  rateFilter.classList.toggle('active', min > 0);
+  rateFilter.querySelectorAll<HTMLElement>('button').forEach((b) => {
+    const k = Number(b.dataset.n);
+    b.classList.toggle('on', k <= min);
+    b.title = k === min ? t('取消星级筛选') : t('只看 {n} 星及以上', { n: k });
+  });
+}
+
+function setMinRating(n: number): void {
+  store.minRating = store.minRating === n ? 0 : n;
+  store.refilter();
+  grid.reset();
+  renderEmpty();
+  updateStatus();
+}
+
+/** 星级筛选开着时改了星级：不够格的照片消失（看大图时先不动，回网格再刷新） */
+function refilterAfterRating(): void {
+  if (!store.minRating || viewer.opened) return;
+  store.refilter();
+  grid.reset(true);
+  renderEmpty();
+  updateStatus();
 }
 
 // ---------------------------------------------------------------------------
@@ -392,6 +433,7 @@ async function toggleStar(photos: Photo[]): Promise<void> {
       if (f) f.starred = n;
     }
     sidebar.render();
+    renderFilters();
     if (r.fallback) toast(t('文件夹不可写，星标已存到本机'), 'warn', 4000);
     // 星标筛选下取消星标：照片应当消失（看图器里先不动，回网格时再刷新）
     if (!target && !viewer.opened && isStarMode(store.view)) {
@@ -414,10 +456,6 @@ async function toggleStar(photos: Photo[]): Promise<void> {
 
 /** 星级（Lightroom 的星级）：数字键 1～5 标成几星，已经全是这个星级时再按一次 = 清除；0 = 清除。不动星标。 */
 async function rate(photos: Photo[], n: number): Promise<void> {
-  if (photos.some((p) => p.remote)) {
-    toast(t('远程相册不支持星级'), 'warn');
-    photos = photos.filter((p) => !p.remote);
-  }
   const { rating, changed } = planRate(photos, n);
   if (!changed.length) return;
   const before = new Map(changed.map((p) => [p, p.rating]));
@@ -429,6 +467,7 @@ async function rate(photos: Photo[], n: number): Promise<void> {
   try {
     const fallback = await store.queueStarWrite(() => api.setRating(paths, rating));
     if (fallback) toast(t('文件夹不可写，星级已存到本机'), 'warn', 4000);
+    refilterAfterRating();
   } catch (e) {
     changed.forEach((p) => {
       if (p.rating === rating) p.rating = before.get(p) ?? 0;
@@ -641,10 +680,15 @@ workdirBtn.addEventListener('click', () => {
   void showWorkdirMenu(r.left, r.bottom + 4);
 });
 $('btn-rescan').addEventListener('click', () => void rescan());
+starredBtn.addEventListener('click', () => toggleStarredView());
+rateFilter.addEventListener('click', (e) => {
+  const b = (e.target as HTMLElement).closest<HTMLElement>('button[data-n]');
+  if (b) setMinRating(Number(b.dataset.n));
+});
 $('btn-export').addEventListener('click', () => openExportDialog(onMoved));
 
 /**
- * 点侧栏“已加星标的照片”或按 Shift+S：星标筛选开 / 关。
+ * 点底栏“★ 星标”（手机上是侧栏“已加星标的照片”）或按 Shift+S：星标筛选开 / 关。
  * 打开：先看所有相册的星标汇总，侧栏只剩有星标的相册，点哪个就看哪个的星标照片。
  * 关闭：正在看某个相册就留在这个相册（显示全部照片）；在汇总里就回到之前看的相册。
  */
@@ -1091,6 +1135,12 @@ function onRemoteEvent(code: string, ev: RemoteEvent): void {
       renderEmpty();
       updateStatus();
     }
+  } else if (ev.type === 'ratings') {
+    const ids = new Set(ev.ids);
+    for (const p of store.all) if (p.remote?.code === code && ids.has(p.remote.id)) p.rating = ev.rating;
+    grid.refreshCells();
+    viewer.refreshStar();
+    refilterAfterRating();
   } else if (ev.type === 'comment' || ev.type === 'comment_deleted') {
     if (ev.type === 'comment') notifyComment(code, ev.comment);
     // 留言数显示在格子上，看大图时留言列表跟着刷新
