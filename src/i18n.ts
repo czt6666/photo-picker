@@ -256,6 +256,7 @@ export const EN: Record<string, string> = {
   "远程相册": "Remote albums",
   "远程相册「{name}」已被创建者删除": "Remote album “{name}” was deleted by its creator",
   "取消星级筛选": "Clear rating filter",
+  "{n} 个文件没能写进星级（只读或文件损坏），选片里照样记着": "Couldn't write the rating into {n} files (read-only or damaged). PhotoPicker still keeps it.",
   "只看 {n} 星及以上": "Show {n}+ stars only",
   "按星级筛选": "Filter by rating",
   "没有 {n} 星及以上的照片": "No photos with {n}+ stars",

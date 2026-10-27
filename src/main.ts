@@ -465,8 +465,9 @@ async function rate(photos: Photo[], n: number): Promise<void> {
   const paths = changed.map((p) => p.path);
   // 和星标写同一个 .picasa.ini，排同一个队
   try {
-    const fallback = await store.queueStarWrite(() => api.setRating(paths, rating));
-    if (fallback) toast(t('文件夹不可写，星级已存到本机'), 'warn', 4000);
+    const r = await store.queueStarWrite(() => api.setRating(paths, rating));
+    if (r.fallback) toast(t('文件夹不可写，星级已存到本机'), 'warn', 4000);
+    else if (r.unwritten.length) toast(t('{n} 个文件没能写进星级（只读或文件损坏），选片里照样记着', { n: r.unwritten.length }), 'warn', 5000);
     refilterAfterRating();
   } catch (e) {
     changed.forEach((p) => {

@@ -107,6 +107,53 @@ impl StarStore {
         self.write(folder, names, Edit::Rating(rating))
     }
 
+    /// 导出 / 移动之后，把星标和星级带到新文件上。`pairs` 是 (源文件, 目标文件)，目标可能改过名（`IMG_1 (1).JPG`）。
+    /// `moved` = 源文件已经不在原处了：原文件夹里的记录顺手清掉，免得以后同名的新照片“继承”了它。
+    /// 返回带星级的目标文件和星级（调用方再写进照片的 XMP）。
+    pub fn carry_marks(&self, pairs: &[(PathBuf, PathBuf)], moved: bool) -> Vec<(PathBuf, u8)> {
+        let mut marks: HashMap<PathBuf, Marks> = HashMap::new();
+        let mut star_to: HashMap<PathBuf, Vec<String>> = HashMap::new();
+        let mut rate_to: HashMap<(PathBuf, u8), Vec<String>> = HashMap::new();
+        let mut clear_from: HashMap<PathBuf, Vec<String>> = HashMap::new();
+        let mut rated = Vec::new();
+        for (src, dst) in pairs {
+            let (Some(sdir), Some(sname), Some(ddir), Some(dname)) = (src.parent(), src.file_name(), dst.parent(), dst.file_name()) else {
+                continue;
+            };
+            let m = marks.entry(sdir.to_path_buf()).or_insert_with(|| self.load_marks(sdir));
+            let sname = sname.to_string_lossy();
+            let dname = dname.to_string_lossy().into_owned();
+            let starred = is_starred(&m.starred, &sname);
+            let rating = rating_of(&m.ratings, &sname);
+            if starred {
+                star_to.entry(ddir.to_path_buf()).or_default().push(dname.clone());
+            }
+            if rating > 0 {
+                rate_to.entry((ddir.to_path_buf(), rating)).or_default().push(dname);
+                rated.push((dst.clone(), rating));
+            }
+            if moved && (starred || rating > 0) {
+                clear_from.entry(sdir.to_path_buf()).or_default().push(sname.into_owned());
+            }
+        }
+        let warn = |r: Result<StarLocation, String>| {
+            if let Err(e) = r {
+                log_warn(&format!("带星标到新文件夹失败：{e}"));
+            }
+        };
+        for (dir, names) in &star_to {
+            warn(self.set(dir, names, true));
+        }
+        for ((dir, r), names) in &rate_to {
+            warn(self.set_rating(dir, names, *r));
+        }
+        for (dir, names) in &clear_from {
+            warn(self.set(dir, names, false));
+            warn(self.set_rating(dir, names, 0));
+        }
+        rated
+    }
+
     fn write(&self, folder: &Path, names: &[String], edit: Edit) -> Result<StarLocation, String> {
         let _guard = self.write_lock.lock();
         let primary = folder.join(INI_NAME);
@@ -301,5 +348,38 @@ mod tests {
         store.set(photos.path(), &names(&["a.jpg"]), false).unwrap();
         assert!(!is_starred(&store.load(photos.path()), "a.jpg"));
         fs::set_permissions(photos.path(), fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    #[test]
+    fn carry_marks_follows_moved_and_renamed_files() {
+        let root = tempfile::tempdir().unwrap();
+        let (a, b) = (root.path().join("a"), root.path().join("a/精选"));
+        fs::create_dir_all(&b).unwrap();
+        let store = StarStore::new(root.path().join("fallback"));
+        store.set(&a, &names(&["IMG_1.JPG", "IMG_1.NEF"]), true).unwrap();
+        store.set_rating(&a, &names(&["IMG_1.JPG", "IMG_1.NEF", "IMG_2.JPG"]), 4).unwrap();
+        store.set_rating(&a, &names(&["IMG_3.JPG"]), 2).unwrap();
+        let pairs = vec![
+            (a.join("IMG_1.JPG"), b.join("IMG_1.JPG")),
+            (a.join("IMG_1.NEF"), b.join("IMG_1.NEF")),
+            (a.join("IMG_2.JPG"), b.join("IMG_2 (1).JPG")),
+            (a.join("IMG_9.JPG"), b.join("IMG_9.JPG")),
+        ];
+        let rated = store.carry_marks(&pairs, true);
+        assert_eq!(rated.len(), 3);
+        let m = store.load_marks(&b);
+        assert!(is_starred(&m.starred, "IMG_1.JPG") && is_starred(&m.starred, "img_1.nef"));
+        assert_eq!(rating_of(&m.ratings, "IMG_2 (1).JPG"), 4, "改了名也跟着走");
+        assert!(!is_starred(&m.starred, "IMG_9.JPG") && rating_of(&m.ratings, "IMG_9.JPG") == 0);
+        let old = store.load_marks(&a);
+        assert!(old.starred.is_empty(), "移走的从原文件夹清掉");
+        assert_eq!(rating_of(&old.ratings, "IMG_1.JPG"), 0);
+        assert_eq!(rating_of(&old.ratings, "IMG_3.JPG"), 2, "没移的不动");
+        // 复制：原文件夹保留
+        let c = root.path().join("c");
+        fs::create_dir_all(&c).unwrap();
+        store.carry_marks(&[(a.join("IMG_3.JPG"), c.join("IMG_3.JPG"))], false);
+        assert_eq!(rating_of(&store.load_marks(&c).ratings, "IMG_3.JPG"), 2);
+        assert_eq!(rating_of(&store.load_marks(&a).ratings, "IMG_3.JPG"), 2);
     }
 }

@@ -35,11 +35,12 @@ export const api = {
     if (remotes.length) Object.assign(res.folders, await remote.setStars(remotes, starred));
     return res;
   },
-  /** 星级：0 = 清除，1～5。不动星标。返回 true = 文件夹不可写，存到了 App 数据目录 */
-  setRating: async (paths: string[], rating: number): Promise<boolean> => {
+  /** 星级：0 = 清除，1～5。不动星标。本地照片同时写进文件的 XMP（Lightroom 能看到） */
+  /** fallback = 本地文件夹不可写、存到了本机；unwritten = 没能写进照片文件（XMP）的文件名 */
+  setRating: async (paths: string[], rating: number): Promise<{ fallback: boolean; unwritten: string[] }> => {
     const { locals, remotes } = split(paths);
     if (remotes.length) await remote.setRating(remotes, rating);
-    return locals.length ? local<boolean>('set_rating', { paths: locals, rating }) : false;
+    return locals.length ? local('set_rating', { paths: locals, rating }) : { fallback: false, unwritten: [] };
   },
   /** 选片清单（文本或文件路径）→ 本机对应照片 */
   matchPickList: (text: string | null, file: string | null) => local<PickListMatch>('match_pick_list', { text, file }),

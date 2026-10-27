@@ -85,6 +85,9 @@ pub struct ExportResult {
     pub failed: Vec<ExportFailure>,
     pub dest: String,
     pub cancelled: bool,
+    /// 成功写出的文件（源, 目标）：导出后把星标、星级带到新文件夹用
+    #[serde(skip)]
+    pub transferred: Vec<(PathBuf, PathBuf)>,
 }
 
 /// 把用户输入的子文件夹名清理成各平台都合法的文件名。
@@ -239,6 +242,7 @@ pub fn run_export(
     let exported = AtomicUsize::new(0);
     let files = AtomicUsize::new(0);
     let failed = Mutex::new(failed);
+    let transferred = Mutex::new(Vec::new());
     let next = AtomicUsize::new(0);
     // 原图复制是磁盘 IO，开太多线程反而互相抢；缩图是 CPU 活，按核数开
     let threads = match req.mode {
@@ -264,12 +268,14 @@ pub fn run_export(
                 match r {
                     Ok(()) => {
                         files.fetch_add(1, Ordering::SeqCst);
+                        transferred.lock().push((src.clone(), target.clone()));
                         // 一张照片 = 主文件 + 全部伴侣都成功才算导出成功
                         let mut whole = true;
                         for (csrc, ctarget) in &item.companions {
                             match transfer(csrc, ctarget) {
                                 Ok(()) => {
                                     files.fetch_add(1, Ordering::SeqCst);
+                                    transferred.lock().push((csrc.clone(), ctarget.clone()));
                                 }
                                 Err(e) => {
                                     whole = false;
@@ -300,6 +306,7 @@ pub fn run_export(
         failed: failed.into_inner(),
         dest: dest.to_string_lossy().into_owned(),
         cancelled: cancel.load(Ordering::Relaxed),
+        transferred: transferred.into_inner(),
     })
 }
 

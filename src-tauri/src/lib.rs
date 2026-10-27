@@ -13,6 +13,7 @@ mod picklist;
 mod pool;
 mod scan;
 mod stars;
+mod xmp;
 
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
@@ -366,10 +367,18 @@ struct SetStarResult {
     folders: BTreeMap<String, usize>,
 }
 
+#[derive(Serialize)]
+struct SetRatingResult {
+    /// 有文件夹不可写、星级存到了 App 数据目录
+    fallback: bool,
+    /// 没能写进照片文件（XMP）的照片：只读、文件坏了等。.picasa.ini 里照样记着
+    unwritten: Vec<String>,
+}
+
 /// 星级（1～5 星，0 = 清除）。和星标是两回事：只写 `rating=`，不动星标，也不影响相册的星标数。
-/// 返回值：是否有文件夹不可写、存到了 App 数据目录。
+/// 同时写进照片文件的 XMP（JPEG 写文件里，RAW 写同名 .xmp），Lightroom 等软件也能看到，见 [`xmp`]。
 #[tauri::command]
-async fn set_rating(paths: Vec<String>, rating: u8, state: AppStateRef<'_>) -> Result<bool, String> {
+async fn set_rating(paths: Vec<String>, rating: u8, state: AppStateRef<'_>) -> Result<SetRatingResult, String> {
     let st = state.inner().clone();
     let rating = rating.min(picasa_ini::MAX_RATING);
     blocking(move || {
@@ -383,7 +392,7 @@ async fn set_rating(paths: Vec<String>, rating: u8, state: AppStateRef<'_>) -> R
                 by_dir.entry(dir.to_path_buf()).or_default().push(name.to_string_lossy().into_owned());
             }
         }
-        let mut fallback = false;
+        let mut res = SetRatingResult { fallback: false, unwritten: Vec::new() };
         for (dir, primaries) in by_dir {
             // RAW+JPG：同名的 RAW 跟着一起标（xmp 不是图片，只在清除时顺带清）
             let map = scan::companion_map(&dir);
@@ -395,9 +404,15 @@ async fn set_rating(paths: Vec<String>, rating: u8, state: AppStateRef<'_>) -> R
                     }
                 }
             }
-            fallback |= st.stars.set_rating(&dir, &names, rating)? == StarLocation::Fallback;
+            res.fallback |= st.stars.set_rating(&dir, &names, rating)? == StarLocation::Fallback;
+            for n in &names {
+                if let Err(e) = xmp::write_rating(&dir.join(n), rating) {
+                    eprintln!("[xmp] {e}");
+                    res.unwritten.push(n.clone());
+                }
+            }
         }
-        Ok(fallback)
+        Ok(res)
     })
     .await
 }
@@ -573,7 +588,15 @@ async fn export_photos(request: ExportRequest, app: AppHandle, state: AppStateRe
                 let _ = app.emit("export-progress", p);
             }
         };
-        export::run_export(&request, &st2.export_cancel, &progress)
+        let res = export::run_export(&request, &st2.export_cancel, &progress)?;
+        // 星标、星级跟着照片走到新文件夹；带星级的也写进新文件的 XMP（缩小导出的新 JPEG 原来没有）
+        let moved = request.move_files && request.mode == export::ExportMode::Original;
+        for (path, rating) in st2.stars.carry_marks(&res.transferred, moved) {
+            if let Err(e) = xmp::write_rating(&path, rating) {
+                eprintln!("[xmp] {e}");
+            }
+        }
+        Ok(res)
     })
     .await;
     st.exporting.store(false, Ordering::SeqCst);
